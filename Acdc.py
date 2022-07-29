@@ -1,5 +1,5 @@
 import numpy as np 
-import yaml
+import pandas as pd
 
 
 #This class represents the ACDC boards, and thus
@@ -34,7 +34,7 @@ class Acdc:
 		#"times": ps, a list of timebase calibrated times
 		#"wraparound": ps, a constant time associated with the delay for when the VCDL goes from the 255th cap to the 0th cap
 		self.columns = ["ch", "waveform", "position", "len_cor", "times", "wraparound"]
-		self.df = pd.DataFrame(columns=columns)
+		self.df = pd.DataFrame(columns=self.columns)
 		#one channel is special, used for synchronization, so we keep it separate 
 		self.sync_ch = 0
 		self.sync_dict = {"ch": self.sync_ch, "waveform": None, "times": None, "wraparound": None} #similar columns as df, currently hard coding the sync channel as "0"

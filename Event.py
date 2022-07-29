@@ -42,10 +42,9 @@ class Event:
 	def get_reduced_series(self):
 		return self.red_df #return the filled reduced data series
 
-	def baseline_subtract(self):
-		for a in self.acdcs:
-			a.baseline_subtract()
+	###the below functions only makes sense after feeding the acdc objects with the waveforms!###
 
+	
 	#looking at whether clocks/triggers
 	#align to within "window" nanoseconds
 	def check_coincidence(self, window=30):
@@ -56,4 +55,23 @@ class Event:
 			fine_clocks[a.get_lappd_station()] = a.get_fine_clock()
 
 		#do math to look at coincidence of clocks. 
-		return 0 #or 1, or a list of those that are in coincidence vs those that are not. 
+		return 0 #or 1, or a list of those that are in coincidence vs those that are not.
+	
+	#Correcting the raw waveform #1!
+	#Look up 'pedestal_counts' from acdc.py   
+	def baseline_subtract(self):
+		for a in self.acdcs:
+			a.baseline_subtract()
+
+	#Correcting the raw waveform #2!
+	#Look up 'voltage_count_curve' from acdc.py
+	def voltage_linearization(self):
+		for a in self.acdcs:
+			a.voltage_linearization()
+
+	def coarse_pulse_detect(self):
+		pass#NOT YET IMPLEMENTED
+	def position_reconstruction(self):
+		pass#NOT YET IMPLEMENTED
+	def time_reconstruction(self):
+		pass#NOT YET IMPLEMENTED

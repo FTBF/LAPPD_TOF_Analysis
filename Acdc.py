@@ -33,7 +33,18 @@ class Acdc:
 		#has its time relative to the last sample calibrated and stored in a calibration file. 
 		#"times": ps, a list of timebase calibrated times
 		#"wraparound": ps, a constant time associated with the delay for when the VCDL goes from the 255th cap to the 0th cap
-		self.columns = ["ch", "waveform", "position", "len_cor", "times", "wraparound"]
+
+		#PLEASE VALIDATE!? -JIN- Each capacitor of the VCDL will carry slightly different number of charges even when we feed the entire ring buffer with a 0.0v DC signal.
+		#As a result, systemic(non-random) fluctuation is visible at the each sample of raw waveforms. We say that each capacitor has a characteristic 'pedestal' ADC count, which stays effectively constant during an entire analysis.
+		#baseline_subtract() function removes the formentioned systemic error from the current waveform by subtracting each pedestal ADC counts from the corresponding samples. 
+		#"pedestal_counts": ADC count, a list of 256 integers, which corresponds to each capicitors of VCDL.
+
+		#DO WE NEED 'pedestal_counts'? ISN'T 'voltage_count_curve' A SUPERSET OF 'pedestal_counts'? -JIN-
+		#ADC counts do not exactly 'measure' the input voltage, in the sense that each capacitor of the VCDL does not charge completely linearly with the input voltage.
+		#Thus the 'voltage-ADC count' curve is measured for each capacitor, and we also consider this as a characteristic curve of the capacitor.
+		#voltage_linearization() function reconstructs actual voltage waveform from ADC count waveform utilizing inverse function theorem(??? -JIN)
+		#"voltage_count_curves": [[voltage, ADC count]*(# of measurement points)]*256, # of measurement points typically being 256.
+		self.columns = ["ch", "waveform", "position", "len_cor", "times", "wraparound", "pedestal_counts", "voltage_count_curves"]
 		self.df = pd.DataFrame(columns=self.columns)
 		#one channel is special, used for synchronization, so we keep it separate 
 		self.sync_ch = 0
@@ -78,7 +89,7 @@ class Acdc:
 		if(clear):
 			self.initialize_dataframe()
 
-		if(calibration_fn is None):
+		if(self.calibration_fn is None):
 			print("No configuration file selected on initializing Acdc objects, using default values")
 			chs = range(30)
 			strip_space = 6.9 #mm
@@ -94,6 +105,8 @@ class Acdc:
 				self.df.at[ch, "len_cor"] = 0
 				self.df.at[ch, "times"] = np.arange(0, 256*self.dt, self.dt)
 				self.df.at[ch, "wraparound"] = 400 #ps
+				self.df.at[ch, "pedestal_counts"] = [0]*256
+				self.df.at[ch, "voltage_count_curves"] = [0,0]*256
 
 		#otherwise, if a calibration file is included, use it
 		else:
@@ -136,9 +149,14 @@ class Acdc:
 
 			self.df.at[ch, "waveform"] = waves[ch]
 
-
+	#Correcting the raw waveform #1!
+	#JIN suggests the ACDC class should carry a chain of waveforms rather then every correction function directly acting on a single waveform variable; the former is much more traceable and debuggable.
 	def baseline_subtract(self):
-		pass
+		pass#NOT YET IMPLEMENTED
+
+	#Correcting the raw waveform #2!
+	def voltage_linearization(self):
+		pass#NOT YET IMPLEMENTED
 
 
 

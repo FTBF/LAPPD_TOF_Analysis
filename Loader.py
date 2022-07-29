@@ -1,4 +1,5 @@
-import numpy as np 
+import numpy as np
+import pandas as pd
 import Event 
 import Acdc
 from datetime import datetime
@@ -15,7 +16,7 @@ import yaml
 class Loader:
 	def __init__(self, spill_fn, board_config=None):
 		self.timestamp = self.get_timestamp_from_fn(spill_fn) #datetime object
-		self.fn = spill_fn
+		self.fn = spill_fn #the name of the raw data file
 
 		self.board_config_dict = self.load_config(board_config)
 
@@ -60,6 +61,7 @@ class Loader:
 
 		spill_df = pd.DataFrame() #reduced dataframe object, culmination of all event analysis
 		#psuedo code for how to load and loop through events
+		#NOT YET IMPLEMENTED
 		for i, raw_event in enumerate(raw_events):
 			for raw_acdc in raw_event:
 				for a in self.adcds:
@@ -97,7 +99,10 @@ class Loader:
 	def get_acdc_calib_file(self, board_id):
 		#this function should have info on where to find these calibration
 		#files, and returns the calibration file name
-		return "dummy_calibration_file.h5"
+		#ex) board_id = 0 -> acdc_0.h5
+		#    board_id = 1 -> acdc_1.h5
+		#    ...
+		return "dummy_calibration_file.h5"#NOT YET IMPLEMENTED
 		
 
 

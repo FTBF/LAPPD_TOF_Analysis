@@ -30,11 +30,11 @@ class Loader:
 			return
 
 		with open(fn, "r") as stream:
-		    try:
-		        return yaml.safe_load(stream)
-		    except Exception as exc:
-		    	print("Had an exception while reading yaml file for board_config in loader class")
-		        print(exc)
+			try:
+				return yaml.safe_load(stream)
+			except Exception as exc:
+				print("Had an exception while reading yaml file for board_config in loader class")
+				print(exc)
 
 	def initialize_boards(self):
 		if(self.board_config_dict is None):

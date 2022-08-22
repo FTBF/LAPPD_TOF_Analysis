@@ -1,1 +1,4 @@
 testData/*
+configs/0/*
+Analysis.ipynb
+*.pyc

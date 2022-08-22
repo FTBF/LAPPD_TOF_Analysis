@@ -1,0 +1,17 @@
+calibration_file: configs/0/test.h5 #A calibration file to save measurement results. You may override existing calibration.
+
+voltage_curve:
+  start: 0x000
+  step: 0x010
+  end: 0xfff
+  prefix: configs/0/scan_pedestals_ #configs/0/Raw_testData_scan_pedestals_
+  suffix: "" #_20220817_052515_b0.txt
+  output: configs/0/voltage_curve_calibration.p
+
+timebase:
+  channels: [11, 17, 23, 29]
+  nevents: 10000
+  true_freq: 243184495 #True frequency of the sine wave source.
+  pedestal: 0x800 #Pedestal voltage during measurement.
+  input: testData/sinRand_4.txt
+  output: configs/0/timebase_calibration.p

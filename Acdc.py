@@ -33,6 +33,7 @@ class Acdc:
 		#has its time relative to the last sample calibrated and stored in a calibration file. 
 		#"times": ps, a list of timebase calibrated times
 		#"wraparound": ps, a constant time associated with the delay for when the VCDL goes from the 255th cap to the 0th cap
+		
 
 		#PLEASE VALIDATE!? -JIN- Each capacitor of the VCDL will carry slightly different number of charges even when we feed the entire ring buffer with a 0.0v DC signal.
 		#As a result, systemic(non-random) fluctuation is visible at the each sample of raw waveforms. We say that each capacitor has a characteristic 'pedestal' ADC count, which stays effectively constant during an entire analysis.
@@ -43,7 +44,7 @@ class Acdc:
 		#ADC counts do not exactly 'measure' the input voltage, in the sense that each capacitor of the VCDL does not charge completely linearly with the input voltage.
 		#Thus the 'voltage-ADC count' curve is measured for each capacitor, and we also consider this as a characteristic curve of the capacitor.
 		#voltage_linearization() function reconstructs actual voltage waveform from ADC count waveform utilizing inverse function theorem(??? -JIN)
-		#"voltage_count_curves": [[voltage, ADC count]*(# of measurement points)]*256, # of measurement points typically being 256.
+		#"voltage_count_curves": 256(# of capacitors)*[[voltage, ADC count]*(# of measurement points)], # of measurement points typically being 256.
 		self.columns = ["ch", "waveform", "position", "len_cor", "times", "wraparound", "pedestal_counts", "voltage_count_curves"]
 		self.df = pd.DataFrame(columns=self.columns)
 		#one channel is special, used for synchronization, so we keep it separate 

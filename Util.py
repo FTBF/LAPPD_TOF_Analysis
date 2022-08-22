@@ -9,6 +9,7 @@ import scipy.optimize
 import scipy.interpolate
 import matplotlib.pyplot as plt
 import os.path
+import sys
 #Util Class is used for generating board calibration files and various measurements that are not directly used in TOF analysis.
 #1. Voltage curve calibration file.
 #2. Timebase calibration file.
@@ -245,7 +246,10 @@ class Util:
 			
 
 if __name__ == "__main__":
-	ut = Util()
+	a = sys.argv[1]
+	if(a is ""):
+		a = None
+	ut = Util(a)
 	#ut.create_voltage_curve()
 	s, t, m = ut.create_timebase()
 	ut.phase_dist_between_channel(s, t, m)

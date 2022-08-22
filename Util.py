@@ -124,7 +124,7 @@ class Util:
 				cap1 = iCap
 				cap2 = (iCap+1)%256
 				r = []
-				for e in range(0,10000):
+				for e in range(0,nevents):
 					if abs(trigger_pos[e]-cap1)<15 or (trigger_pos[e]-15<0 and 256-cap1+trigger_pos[e]<15) or (cap1-15<0 and 256-trigger_pos[e]+cap1<15):
 						continue
 					else: 
@@ -167,9 +167,10 @@ class Util:
 	#This function can be used AFTER a timebase calibration to visualize the phase distribution between channels.
 	def phase_dist_between_channel(self, sineData, trigger_pos, timebase):
 		true_freq = self.measurement_config["timebase"]["true_freq"]
+		nevents = self.measurement_config["timebase"]["nevents"]
 		ringTimeOffsets = np.concatenate((timebase,timebase,timebase), 1)
-		phase = np.zeros((10000, 30))
-		for event in range(10000):
+		phase = np.zeros((nevents, 30))
+		for event in range(nevents):
 			for channel in [11, 17, 23,29]:
 				xdata = np.cumsum(ringTimeOffsets[channel, trigger_pos[event]+14:trigger_pos[event]+14+256])*1e9
 				ydata = sineData[event,channel,:]

@@ -29,7 +29,7 @@ class Util:
 
 	#Receives a radian and returns the value wrapped to [-pi, pi]
 	def wrap(x):
-		return np.fmod(np.fmod(x, 2*math.pi)+math.pi, 2*math.pi)-math.pi
+		return np.remainder(x+math.pi, 2*math.pi)-math.pi
 	def getDataRaw(fname):
 		data = []
 		format=bitstruct.compile("p4u12u12u12u12u12"*(256*int(30/5)))
@@ -82,16 +82,9 @@ class Util:
 		for i in range(30):
 			self.df.loc[i, "voltage_count_curves"] = voltage_curve[i]
 		self.save()
-	
-	#Reads a raw data file and saves a timebase calibration file.
-	def create_timebase(self):
-		
-		sineData = Util.getDataRaw(self.measurement_config["timebase"]["input"])
-		true_freq = self.measurement_config["timebase"]["true_freq"]#Frequency of the signal source used for timebase measurement.
+	def find_trigger_pos(self, sineData):
 		nevents = self.measurement_config["timebase"]["nevents"]
-		#Find trigger position
 		trigger_pos = [0]*nevents
-		sineData = self.linearize_voltage(sineData) - 1.2/4096*0x800
 		for e in range(0,nevents):
 			pulse = sineData[e,:,:]
 			max = 0
@@ -112,7 +105,17 @@ class Util:
 					if max <diffsum:
 						max = diffsum
 						trigger_pos[e] = cap1 
+		return trigger_pos
+	#Reads a raw data file and saves a timebase calibration file.
+	def create_timebase(self):
 		
+		sineData = Util.getDataRaw(self.measurement_config["timebase"]["input"])
+		sineData = self.linearize_voltage(sineData) - 1.2/4096*0x800
+		true_freq = self.measurement_config["timebase"]["true_freq"]#Frequency of the signal source used for timebase measurement.
+		nevents = self.measurement_config["timebase"]["nevents"]
+		#Find trigger position
+		
+		trigger_pos = self.find_trigger_pos(sineData)
 		ydata = sineData
 
 		timebase = np.zeros((30, 256))
@@ -163,32 +166,79 @@ class Util:
 		for i in range(30):
 			self.df.at[i, "times"] = timebase[i]
 		self.save()
-		return sineData, trigger_pos, timebase
+		return sineData, trigger_pos
 
 	#This function can be used AFTER a timebase calibration to visualize the phase distribution between channels.
-	def phase_dist_between_channel(self, sineData, trigger_pos, timebase):
+	def phase_dist_between_channel(self):
+		sineData = Util.getDataRaw(self.measurement_config["timebase"]["input"])
+		sineData = self.linearize_voltage(sineData) - 1.2/4096*0x800
+		trigger_pos = self.find_trigger_pos(sineData)
 		true_freq = self.measurement_config["timebase"]["true_freq"]
 		nevents = self.measurement_config["timebase"]["nevents"]
-		ringTimeOffsets = np.concatenate((timebase,timebase,timebase), 1)
 		phase = np.zeros((nevents, 30))
+		chi = []
 		for event in range(nevents):
+			chi.append(0)
+			xdataList = np.zeros((30, 256))
+			ydataList = np.zeros((30, 256))
+			sineCurve = np.zeros((30, 256))
 			for channel in [11, 17, 23,29]:
-				xdata = np.cumsum(ringTimeOffsets[channel, trigger_pos[event]+14:trigger_pos[event]+14+256])*1e9
-				ydata = sineData[event,channel,:]
-				ringydata = np.concatenate((ydata,ydata,ydata))[trigger_pos[event]+15:trigger_pos[event]+15+256]
-				#ydata = linDat[event, :, 5]
-
-				popt, pcov = scipy.optimize.curve_fit(Util.sine, xdata[50:100], ringydata[50:100], p0=(1.0, 0.0, true_freq*math.pi*2e-9, 0.0), bounds=((0.1, -2, true_freq*math.pi*2e-9*0.8, -4),(2, 2, true_freq*math.pi*2e-9*1.2,4)))
-				popt, pcov = scipy.optimize.curve_fit(Util.sine, xdata[:220], ringydata[:220], p0=popt)
+				ringTimeOffsets = np.concatenate((self.df.at[channel, "times"],self.df.at[channel, "times"],self.df.at[channel, "times"]), 0)
+				xdata = np.cumsum(ringTimeOffsets[trigger_pos[event]+14:trigger_pos[event]+14+256])
+				ydata = np.concatenate((sineData[event,channel,:],sineData[event,channel,:],sineData[event,channel,:]))[trigger_pos[event]+15:trigger_pos[event]+15+256]
+				popt, pcov = scipy.optimize.curve_fit(Util.sine, xdata[50:100], ydata[50:100], p0=(1.0, 0.0, true_freq*math.pi*2, 0.0), bounds=((0.1, -2, (true_freq-1)*math.pi*2, -4),(2, 2, (true_freq+1)*math.pi*2,4)))
+				popt, pcov = scipy.optimize.curve_fit(Util.sine, xdata[:128], ydata[:128], p0=popt, bounds=((0.1, -2, (true_freq-1)*math.pi*2, -4),(2, 2, (true_freq+1)*math.pi*2,4)))
+				diff = (ydata - Util.sine(xdata, *popt))/7e-4#np.abs(popt[0])
+				chi[event]+=(diff**2)[:128].sum()/128
 				phase[event, channel] = popt[3]
-		fig, (ax1, ax2, ax3) = plt.subplots(3, 1)
-		ax1.hist(Util.wrap(phase[:,17] - phase[:,11])/true_freq/math.pi/2e-12, bins="fd")
-		ax2.hist(Util.wrap(phase[:,23] - phase[:,11])/true_freq/math.pi/2e-12, bins="fd")
-		ax3.hist(Util.wrap(phase[:,29] - phase[:,11])/true_freq/math.pi/2e-12, bins="fd")
+				
+				xdataList[channel, :] = xdata
+				ydataList[channel, :] = ydata
+				sineCurve[channel, :] = Util.sine(xdata, *popt)
+			if trigger_pos[event] < 120 and chi[event]>50000:
+				self.plot(xdataList, ydataList)
+				self.plot(xdataList, sineCurve)
+		plt.title("Time offset and voltage calibration")
+		plt.xlabel("Chi Squared")
+		plt.ylabel("Events(total=1e5)")
+		plt.hist(chi, bins="fd")
+		
+		phase2 = np.array([phase[x, :] for x in range(nevents) if trigger_pos[x] < 120]) #remove events that are too close to the wraparound.
+		
+		
+		fig, (ax1, ax2, ax3, ax4, ax5, ax6) = plt.subplots(6, 1)
+		ax1.hist(Util.wrap(phase2[:,17] - phase2[:,11])/true_freq/math.pi/2e-12, bins="fd")
+		ax2.hist(Util.wrap(phase2[:,23] - phase2[:,11])/true_freq/math.pi/2e-12, bins="fd")
+		ax3.hist(Util.wrap(phase2[:,29] - phase2[:,11])/true_freq/math.pi/2e-12, bins="fd")
+		ax4.hist(Util.wrap(phase2[:,23] - phase2[:,17])/true_freq/math.pi/2e-12, bins="fd")
+		ax5.hist(Util.wrap(phase2[:,29] - phase2[:,17])/true_freq/math.pi/2e-12, bins="fd")
+		ax6.hist(Util.wrap(phase2[:,29] - phase2[:,23])/true_freq/math.pi/2e-12, bins="fd")
+		
 		plt.xlabel("phase diff(ps)")
+		plt.ylabel(str(len(phase2))+" events")
 		fig.tight_layout()
 		plt.show()
-	
+		heatmap, xedges, yedges = np.histogram2d(Util.wrap(phase[:,29] - phase[:,23])/true_freq/math.pi/2e-12, chi, bins=(100,100))
+		plt.imshow(heatmap.T, extent=[xedges[0], xedges[-1], yedges[0], yedges[-1]], origin="lower", aspect="auto")
+		plt.show()
+		heatmap, xedges, yedges = np.histogram2d(Util.wrap(phase[:,29] - phase[:,17])/true_freq/math.pi/2e-12, chi, bins=(100,100))
+		plt.imshow(heatmap.T, extent=[xedges[0], xedges[-1], yedges[0], yedges[-1]], origin="lower", aspect="auto")
+		plt.show()
+		heatmap, xedges, yedges = np.histogram2d(Util.wrap(phase[:,29] - phase[:,11])/true_freq/math.pi/2e-12, chi, bins=(100,100))
+		plt.imshow(heatmap.T, extent=[xedges[0], xedges[-1], yedges[0], yedges[-1]], origin="lower", aspect="auto")
+		plt.show()
+
+
+	def plot(self, xdata, ydata):
+		plt.title("Time offset and voltage calibration")
+		plt.xlabel("time (ns)")
+		plt.ylabel("Voltage (V)")
+		for channel in [11, 17, 23,29]:
+			plt.plot(xdata[channel], ydata[channel])
+		plt.legend(loc="lower right")
+		plt.show()
+
+
 	def savitzky_golay(y, window_size, order, deriv=0, rate=1):
 		from math import factorial
 		
@@ -246,13 +296,14 @@ class Util:
 			
 
 if __name__ == "__main__":
-	a = sys.argv[1]
-	if(a is ""):
+	try:
+		a = sys.argv[1]
+	except(IndexError):
 		a = None
 	ut = Util(a)
 	#ut.create_voltage_curve()
-	s, t, m = ut.create_timebase()
-	ut.phase_dist_between_channel(s, t, m)
+	#ut.create_timebase()
+	ut.phase_dist_between_channel()
 
 
 

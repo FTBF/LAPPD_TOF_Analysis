@@ -245,10 +245,48 @@ class Util:
 			plt.plot(xdata[channel], ydata[channel])
 		plt.legend(loc="lower right")
 		plt.show()
+	def raw_plot(self):
+		event = self.measurement_config["plot"]["event"]
+		rawData = Util.getDataRaw(self.measurement_config["plot"]["input"])
+		plt.title("Time offset and voltage calibration")
+		plt.xlabel("time [s]")
+		plt.ylabel("Voltage [V]")
+		for channel in [0,1,2,3,4,5]:
+			plt.plot(np.linspace(0, 255,256), rawData[event, channel, :], label=str(channel))
+		plt.legend(loc="lower right")
+		plt.show()
+		plt.title("Time offset and voltage calibration")
+		plt.xlabel("time [s]")
+		plt.ylabel("Voltage [V]")
+		for channel in [6,7,8,9,10,11]:
+			plt.plot(np.linspace(0, 255,256), rawData[event, channel, :], label=str(channel))
+		plt.legend(loc="lower right")
+		plt.show()
+		plt.title("Time offset and voltage calibration")
+		plt.xlabel("time [s]")
+		plt.ylabel("Voltage [V]")
+		for channel in [12,13,14,15,16,17]:
+			plt.plot(np.linspace(0, 255,256), rawData[event, channel, :], label=str(channel))
+		plt.legend(loc="lower right")
+		plt.show()
+		plt.title("Time offset and voltage calibration")
+		plt.xlabel("time [s]")
+		plt.ylabel("Voltage [V]")
+		for channel in [18,19,20,21,22,23]:
+			plt.plot(np.linspace(0, 255,256), rawData[event, channel, :], label=str(channel))
+		plt.legend(loc="lower right")
+		plt.show()
+		plt.title("Time offset and voltage calibration")
+		plt.xlabel("time [s]")
+		plt.ylabel("Voltage [V]")
+		for channel in [24,25,26,27,28,29]:
+			plt.plot(np.linspace(0, 255,256), rawData[event, channel, :], label=str(channel))
+		plt.legend(loc="lower right")
+		plt.show()
 	def simple_plot(self):
 		event = self.measurement_config["plot"]["event"]
-		sineData = Util.getDataRaw(self.measurement_config["plot"]["input"])
-		sineData = self.linearize_voltage(sineData) - 1.2/4096*self.measurement_config["plot"]["pedestal"]
+		rawData = Util.getDataRaw(self.measurement_config["plot"]["input"])
+		sineData = self.linearize_voltage(rawData) - 1.2/4096*self.measurement_config["plot"]["pedestal"]
 		plt.title("Time offset and voltage calibration")
 		plt.xlabel("time [s]")
 		plt.ylabel("Voltage [V]")
@@ -347,6 +385,8 @@ if __name__ == "__main__":
 	except(IndexError):
 		a = None
 	ut = Util(a)
+	if 'r' in ut.measurement_config["tasks"]:
+		ut.raw_plot()
 	if 'p' in ut.measurement_config["tasks"]:
 		ut.simple_plot()
 	if 'v' in ut.measurement_config["tasks"]:

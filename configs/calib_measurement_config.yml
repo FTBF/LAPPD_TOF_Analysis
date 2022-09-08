@@ -1,9 +1,9 @@
 calibration_file: configs/0/test.h5 #A calibration file to save measurement results. You may override existing calibration.
-tasks: p #p: plot, v: voltage curve, t:timebase, j:phase jittering calculation
+tasks: r #r: raw data, p: linearized plot, v: voltage curve, t:timebase, j:phase jittering calculation
 plot:
-  event: 0
+  event: 20
   pedestal: 0x800
-  input: testData/EJ_WR_1
+  input: testData/EJ_WR_5way_3
 voltage_curve:
   start: 0x000
   step: 0x010

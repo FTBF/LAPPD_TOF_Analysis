@@ -1,5 +1,9 @@
 calibration_file: configs/0/test.h5 #A calibration file to save measurement results. You may override existing calibration.
-
+tasks: p #p: plot, v: voltage curve, t:timebase, j:phase jittering calculation
+plot:
+  event: 0
+  pedestal: 0x800
+  input: testData/EJ_WR_1
 voltage_curve:
   start: 0x000
   step: 0x010
@@ -9,7 +13,7 @@ voltage_curve:
 
 timebase:
   channels: [11, 17, 23, 29]
-  nevents: 10000
-  true_freq: 243184495 #True frequency of the sine wave source.
+  nevents: 1000
+  true_freq: 250000000 #243184495 #True frequency of the sine wave source.
   pedestal: 0x800 #Pedestal voltage during measurement.
-  input: testData/sinRand_4.txt
+  input: testData/EJ_WR_5way_3

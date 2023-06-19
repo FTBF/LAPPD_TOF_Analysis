@@ -12,7 +12,7 @@ voltage_curve:
   suffix: "" #_20220817_052515_b0.txt
 
 timebase:
-  channels: [11, 17, 23, 29]
+  channels: [11]
   nevents: 10000
   true_freq: 250000000 #243184495 #True frequency of the sine wave source.
   pedestal: 0x800 #Pedestal voltage during measurement.

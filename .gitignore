@@ -1,3 +1,6 @@
 testData/*
 configs/0/*
 *.pyc
+Analysis.ipynb
+*.jpg
+*.png

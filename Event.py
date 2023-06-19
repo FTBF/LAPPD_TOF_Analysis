@@ -7,6 +7,7 @@ import pandas as pd
 #it collates that information into a "reduced data" series, which can
 #be appended to a larger data frame to be shipped out for post processing
 #or is used in live-time display of analyzed data outputs. 
+#TODO: For efficiency, event class is created after analysis done in ACDC class.
 
 class Event:
 	def __init__(self, num = None, acdcs=None):

@@ -197,6 +197,37 @@ class Acdc:
 		self.cur_waveforms = self.cur_waveforms_raw - self.pedestal_counts
 
 		return
+	
+	def hist_single_cap_counts_vs_ped(self, ch, cap):
+		"""xxx write a description
+		
+		"""
+		single_cap_ped_counts = self.pedestal_data[:, ch, cap]
+		ped_bins_left_edge = single_cap_ped_counts.min()
+		ped_bins_right_edge = single_cap_ped_counts.max()+1
+		ped_bins = np.linspace(ped_bins_left_edge, ped_bins_right_edge, ped_bins_right_edge-ped_bins_left_edge+1)
+		print(f'Minimum pedestal ADC count: {ped_bins_left_edge}')
+		print(f'Maximum pedestal ADC count: {ped_bins_right_edge-1}')
+
+		single_cap_raw_counts = self.cur_waveforms_raw[:, ch, cap]
+		raw_bins_left_edge = single_cap_raw_counts.min()
+		raw_bins_right_edge = single_cap_raw_counts.max()+1
+		raw_bins = np.linspace(raw_bins_left_edge, raw_bins_right_edge, raw_bins_right_edge-raw_bins_left_edge+1)
+		print(f'Minimum raw waveform ADC count: {raw_bins_left_edge}')
+		print(f'Maximum raw waveform ADC count: {raw_bins_right_edge-1}')
+
+		fig, ax = plt.subplots()
+
+		ax.hist(single_cap_ped_counts, histtype='step', linewidth=3, bins=ped_bins)
+		ax.hist(single_cap_raw_counts, histtype='step', linewidth=3, bins=raw_bins)
+
+		ax.set_xlabel('ADC Counts')
+		ax.set_ylabel('Number of events (per 1 count bins)')
+		ax.set_yscale('log')
+
+		plt.show()
+
+		return
 
 
 	#the calibration file is an .h5 file that holds a pandas dataframe
@@ -312,7 +343,9 @@ if __name__=='__main__':
 
 	test_acdc.import_raw_data(data_path)
 
-	print(test_acdc.cur_times)
+	# print(test_acdc.cur_times)
+
+	test_acdc.hist_single_cap_counts_vs_ped(10, 22)
 	
 	exit()
 

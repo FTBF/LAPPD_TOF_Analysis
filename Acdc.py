@@ -12,7 +12,7 @@ def convert_to_list(some_object):
 		(any) some_object: what you want to convert to a list (if not already a list)
 	"""
 
-	if not isinstance(some_object, list):
+	if not isinstance(some_object, list) and not isinstance(some_object, np.ndarray):
 		some_object = [some_object]
 
 	return some_object
@@ -55,6 +55,7 @@ class Acdc:
 		self.pedestal_voltage = init_data_dict['pedestal_voltage']
 		self.voltage_count_curves = init_data_dict['voltage_count_curves']
 
+		self.cur_times, self.cur_times_320, self.cur_waveforms_raw, self.cur_waveforms = None, None, None, None
 		# Imports waveform data if a path was specified upon Acdc initialization
 		if raw_waveform_data_path_list is not None:
 
@@ -66,9 +67,8 @@ class Acdc:
 			self.process_raw_data()
 
 		else:
-
 			print('Initializing ACDC object with no waveform data.')
-			self.cur_times, self.cur_times_320, self.cur_waveforms_raw = None, None, None
+
 
 
 
@@ -193,6 +193,7 @@ class Acdc:
 			
 			# See __init__ function for description of the following variables.
 			self.cur_times_320, self.cur_times, self.cur_waveforms_raw = times_320, times, data
+			self.process_raw_data()
 
 		# Still returns relevant data
 		return times_320, times, data
@@ -242,11 +243,33 @@ class Acdc:
 
 		return
 	
-	def plot_ped_corrected_pulse(self, event, channel):
+	def plot_ped_corrected_pulse(self, event, channels=np.linspace(0,29,30, dtype=int)):
 		"""xxx write a description
 		
 		"""
 
+		channels = convert_to_list(channels)
+
+		print(channels)
+		print(len(channels))
+
+		x_data = np.linspace(0,255,256)
+		y_data_list = self.cur_waveforms[event,channels,:].reshape(len(channels), -1)
+		y_data_raw_list = self.cur_waveforms_raw[event,channels,:].reshape(len(channels), -1)
+
+		fig, (ax1, ax2) = plt.subplots(2, 1)
+		for channel, y_data in enumerate(y_data_list):
+			ax1.plot(x_data, y_data, label='Channel %i'%channel)
+		ax1.set_xlabel("Time sample")
+		ax1.set_ylabel("ADC count (ped corrected)")
+
+		for channel, y_data in enumerate(y_data_raw_list):
+			ax2.plot(x_data, y_data, label="Channel %i"%channel)
+		ax2.set_xlabel("Time sample")
+		ax2.set_ylabel("ADC count (raw)")
+
+		fig.tight_layout()
+		plt.show()
 
 		return
 
@@ -367,6 +390,8 @@ if __name__=='__main__':
 	# print(test_acdc.cur_times)
 
 	# test_acdc.hist_single_cap_counts_vs_ped(10, 22)
+
+	test_acdc.plot_ped_corrected_pulse(154)
 	
 	exit()
 

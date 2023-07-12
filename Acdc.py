@@ -4,6 +4,20 @@ import bitstruct.c as bitstruct
 from matplotlib import pyplot as plt
 
 
+# Some quick helper functions
+
+def convert_to_list(some_object):
+	"""Converts an object into a single-element list if the object is not already a list. Helps when a function works by going through elements of a list, but you want to pass a single element to that function.
+	Arguments:
+		(any) some_object: what you want to convert to a list (if not already a list)
+	"""
+
+	if not isinstance(some_object, list):
+		some_object = [some_object]
+
+	return some_object
+
+
 #This class represents the ACDC boards, and thus
 #in proxy an LAPPD - as in the LAPPD TOF system we plan
 #to use one Acdc for each LAPPD, read out in single-ended
@@ -228,6 +242,14 @@ class Acdc:
 		plt.show()
 
 		return
+	
+	def plot_ped_corrected_pulse(self, event, channel):
+		"""xxx write a description
+		
+		"""
+
+
+		return
 
 
 	#the calibration file is an .h5 file that holds a pandas dataframe
@@ -327,7 +349,7 @@ if __name__=='__main__':
 		'sync_ch': 0,
 		'strip_pos': None,
 		'len_cor': None,
-		'times': None,			# xxx need a better name for this
+		'times': None,			 # xxx need a better name for this
 		'wraparound': None,
 		'vel': 0.18,			 # mm/ps, average (~500 MHz - 1GHz) propagation velocity of the strip 
 		'dt': 1.0/(40e6*256),	 # picoseconds, nominal sampling time interval, 1/(clock to PSEC4 x number of samples)
@@ -345,7 +367,7 @@ if __name__=='__main__':
 
 	# print(test_acdc.cur_times)
 
-	test_acdc.hist_single_cap_counts_vs_ped(10, 22)
+	# test_acdc.hist_single_cap_counts_vs_ped(10, 22)
 	
 	exit()
 

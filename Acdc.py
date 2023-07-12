@@ -47,13 +47,14 @@ class Acdc:
 			# Format of the variables import_raw_data writes to:
 			#	self.cur_times: xxx, shape=(# events,)
 			# 	self.cur_times_320: xxx, shape=(#events,)
-			# 	self.cur_waveforms: # ADC count, shape=(# events, # channels, # capacitors)
+			# 	self.cur_waveforms_raw: # ADC count, shape=(# events, # channels, # capacitors); a list of waveforms (2D arrays) for all events, raw means no processing/pedestal subtraction/voltage conversion
 			self.import_raw_data(raw_waveform_data_path_list)
+			self.process_raw_data()
 
 		else:
 
 			print('Initializing ACDC object with no waveform data.')
-			self.cur_times, self.cur_times_320, self.cur_waveforms = None, None, None
+			self.cur_times, self.cur_times_320, self.cur_waveforms_raw = None, None, None
 
 
 
@@ -178,10 +179,24 @@ class Acdc:
 		if not is_pedestal_data:
 			
 			# See __init__ function for description of the following variables.
-			self.cur_times_320, self.cur_times, self.cur_waveforms = times_320, times, data
+			self.cur_times_320, self.cur_times, self.cur_waveforms_raw = times_320, times, data
 
 		# Still returns relevant data
 		return times_320, times, data
+	
+	def process_raw_data(self):
+		"""Cleans up raw waveform data. Current implementation simply subtracts of average pedestal ADC count of each capacitor in each channel. Future implementations will use voltage_count_curves and interpolation to correct ADC counts and convert to voltage.
+		Arguments:
+			(Acdc) self		
+		"""
+
+		# Averages pedestal_data over all the events
+		self.pedestal_counts = self.pedestal_data.mean(0)
+
+		# Subtracts pedestal_counts from the waveform data for each event (subtracts by broadcasting the 2D pedestal_counts array to the 3D cur_waveforms_raw array)
+		self.cur_waveforms = self.cur_waveforms_raw - self.pedestal_counts
+
+		return
 
 
 	#the calibration file is an .h5 file that holds a pandas dataframe

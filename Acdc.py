@@ -143,8 +143,7 @@ class Acdc:
 
 		# Converts raw_waveform_data_path_list to list if it was mistakenly passed as a string (common error
 		#	when working with single binary file).
-		if not isinstance(raw_data_path_list, list):
-			raw_data_path_list = [raw_data_path_list]
+		raw_data_path_list = convert_to_list(raw_data_path_list)
 
 		# Imports each raw data file in the list supplied
 		for raw_data_path in raw_data_path_list:

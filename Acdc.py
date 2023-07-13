@@ -2,6 +2,8 @@ import numpy as np
 import pandas as pd
 import bitstruct.c as bitstruct
 from matplotlib import pyplot as plt
+import scipy
+from scipy.interpolate import splrep, BSpline, CubicSpline
 
 
 # Some quick helper functions
@@ -285,6 +287,89 @@ class Acdc:
 
 		return
 
+	def find_event_centers(self, events=None):
+		"""xxx add description
+
+		"""
+
+		# If no `events` list is passed, assume we must find centers for all events in cur_waveforms. 
+		if events is None:
+			waveforms = self.cur_waveforms
+		else:
+			events = convert_to_list(events)
+			waveforms = self.cur_waveforms[events,:,:]
+
+		num_skipped_waveforms = 0
+		for waveform in waveforms:
+
+			try:
+				l_pos = self.find_l_pos_spline(waveform)
+				t_pos = self.find_t_pos()
+
+			except:
+				num_skipped_waveforms
+				pass
+
+		return
+	
+	def find_l_pos_spline(self, waveform):
+		"""Finds the longitudinal position (l_pos) of the incident particle using a spline fitting method.
+		xxx add more
+		
+		"""
+
+		pos_waveform = -1*waveform
+		
+		xdata = np.linspace(0, 255, 256)
+		largest_signal_channel = pos_waveform.max(axis=1).argmax()
+		ydata = pos_waveform[largest_signal_channel]
+
+		height_cutoff = 0.5*ydata.max()
+		distance_between_peaks = 20
+		peak_region_radius = 15
+
+		peaks_rough = scipy.signal.find_peaks(ydata, height=height_cutoff, distance=distance_between_peaks)[0]
+		peaks_precise = []
+
+		for rough_peak in peaks_rough:
+
+			peak_region_cut = (xdata > (rough_peak-peak_region_radius)) & (xdata < (rough_peak+peak_region_radius))
+
+			spline_tuple = splrep(xdata[peak_region_cut], ydata[peak_region_cut], k=3, s=10000)
+			data_bspline = BSpline(*spline_tuple)
+			ddata_bspline = data_bspline.derivative()
+			
+			peak_region_domain = np.linspace(rough_peak-peak_region_radius, rough_peak+peak_region_radius, 100)
+			dcubic_spline = CubicSpline(peak_region_domain, ddata_bspline(peak_region_domain))
+
+			extrema = dcubic_spline.solve(0)
+
+			extrema = extrema[(extrema > (rough_peak-12)) & (extrema < (rough_peak+12))]
+
+			if len(extrema) > 0:
+				extrema = extrema[data_bspline(extrema).argsort()][-1]
+			else:
+				extrema = rough_peak
+			
+			peaks_precise.append(extrema)
+		
+		peaks_precise = np.array(peaks_precise)
+		l_pos = self.convert_cap_to_t_pos(peaks_precise)
+		
+		return
+	
+	def convert_cap_to_t_pos(self, peaks):
+		"""xxx add description
+		xxx edit the return statement
+		"""
+
+		return peaks
+
+	def find_t_pos(self):
+
+		return
+	
+
 	#the calibration file is an .h5 file that holds a pandas dataframe
 	#that has the same dataframe structure as is listed above for self.df. 
 	#The one difference for simplicity is that the self.sync_dict is contained
@@ -402,7 +487,9 @@ if __name__=='__main__':
 
 	# test_acdc.hist_single_cap_counts_vs_ped(10, 22)
 
-	test_acdc.plot_ped_corrected_pulse(154)
+	# test_acdc.plot_ped_corrected_pulse(154)
+
+	test_acdc.find_event_centers()
 	
 	exit()
 

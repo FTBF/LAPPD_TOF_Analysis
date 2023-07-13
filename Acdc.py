@@ -243,36 +243,44 @@ class Acdc:
 
 		return
 	
-	def plot_ped_corrected_pulse(self, event, channels=np.linspace(0,29,30, dtype=int)):
-		"""xxx write a description
-		
+	def plot_ped_corrected_pulse(self, event, channels=None):
+		"""Plots a single event across multiple channels to compare raw and pedestal-corrected ADC counts.
+		Arguments:
+			(Acdc) self
+			(int) event: the index number of the event you wish to plot
+			(int / list) channels: a single channel or list of channels you wish to plot for the event
 		"""
 
+		# Checks if user specifies a subset of channels, if so, makes sure subset is of type list, if not, uses all channels.
+		if channels is None:
+			channels = np.linspace(0, 29, 30, dtype=int)
 		channels = convert_to_list(channels)
 
-		print(channels)
-		print(len(channels))
-
+		# Creates 1D array of x_data (all 256 capacitors) and computes 2D array (one axis channel #, other axis capacitor #) of
+		#	corrected and raw ADC data
 		x_data = np.linspace(0,255,256)
 		y_data_list = self.cur_waveforms[event,channels,:].reshape(len(channels), -1)
 		y_data_raw_list = self.cur_waveforms_raw[event,channels,:].reshape(len(channels), -1)
 
+		# Plots the corrected ADC data
 		fig, (ax1, ax2) = plt.subplots(2, 1)
 		for channel, y_data in enumerate(y_data_list):
 			ax1.plot(x_data, y_data, label='Channel %i'%channel)
 		ax1.set_xlabel("Time sample")
 		ax1.set_ylabel("ADC count (ped corrected)")
+		ax1.tick_params(right=True, top=True)
 
+		# Plots the raw ADC data
 		for channel, y_data in enumerate(y_data_raw_list):
 			ax2.plot(x_data, y_data, label="Channel %i"%channel)
 		ax2.set_xlabel("Time sample")
 		ax2.set_ylabel("ADC count (raw)")
+		ax2.tick_params(right=True, top=True)
 
 		fig.tight_layout()
 		plt.show()
 
 		return
-
 
 	#the calibration file is an .h5 file that holds a pandas dataframe
 	#that has the same dataframe structure as is listed above for self.df. 

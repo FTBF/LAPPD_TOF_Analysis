@@ -213,9 +213,13 @@ class Acdc:
 		return
 	
 	def hist_single_cap_counts_vs_ped(self, ch, cap):
-		"""xxx write a description
-		
+		"""Plots a histogram of ADC counts for a single capacitor in a channel for all events recorded in the binary file. Also plots a histogram for the pedestal ADC counts of the same capacitor.
+		Arguments:
+			(int): channel number
+			(int): capacitor number		
 		"""
+
+		# Calculates the bins for the histogram using the maximum and minimum ADC counts
 		single_cap_ped_counts = self.pedestal_data[:, ch, cap]
 		ped_bins_left_edge = single_cap_ped_counts.min()
 		ped_bins_right_edge = single_cap_ped_counts.max()+1
@@ -223,6 +227,7 @@ class Acdc:
 		print(f'Minimum pedestal ADC count: {ped_bins_left_edge}')
 		print(f'Maximum pedestal ADC count: {ped_bins_right_edge-1}')
 
+		# Calculates the bins for the histogram using the maximum and minimum ADC counts
 		single_cap_raw_counts = self.cur_waveforms_raw[:, ch, cap]
 		raw_bins_left_edge = single_cap_raw_counts.min()
 		raw_bins_right_edge = single_cap_raw_counts.max()+1
@@ -230,15 +235,13 @@ class Acdc:
 		print(f'Minimum raw waveform ADC count: {raw_bins_left_edge}')
 		print(f'Maximum raw waveform ADC count: {raw_bins_right_edge-1}')
 
+		# Plots histogram
 		fig, ax = plt.subplots()
-
 		ax.hist(single_cap_ped_counts, histtype='step', linewidth=3, bins=ped_bins)
 		ax.hist(single_cap_raw_counts, histtype='step', linewidth=3, bins=raw_bins)
-
 		ax.set_xlabel('ADC Counts')
 		ax.set_ylabel('Number of events (per 1 count bins)')
 		ax.set_yscale('log')
-
 		plt.show()
 
 		return

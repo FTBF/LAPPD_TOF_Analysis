@@ -1,5 +1,5 @@
-calibration_file: configs/0/test.h5 #A calibration file to save measurement results. You may override existing calibration.
-tasks: oj #r: raw data, p: linearized plot, v: voltage curve, t:timebase, T:timebase first order j:phase jittering calculation, l: first order timebase correction
+calibration_file: configs/0/test.root #A calibration file to save measurement results. You may override existing calibration.
+tasks: ovw #r: raw data, p: linearized plot, v: voltage curve, t:timebase, T:timebase first order j:phase jittering calculation, l: first order timebase correction
 plot:
   event: 20
   pedestal: 0x800

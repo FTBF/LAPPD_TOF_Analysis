@@ -1,10 +1,9 @@
 import math
 from textwrap import fill
 import numpy as np
-import pandas as pd
 from datetime import datetime
 import yaml
-import bitstruct as bitstruct
+import bitstruct.c as bitstruct
 import scipy
 import scipy.optimize
 import scipy.interpolate
@@ -13,6 +12,8 @@ import matplotlib.pyplot as plt
 import multiprocessing as mp
 import os.path
 import sys
+import ROOT
+from datetime import date
 #Util Class is used for generating board calibration files and various measurements that are not directly used in TOF analysis.
 #1. Voltage curve calibration file.
 #2. Timebase calibration file.
@@ -22,12 +23,25 @@ DEBUG = False
 class Util:
 	def __init__(self, board_config=None):
 		self.measurement_config = Util.load_config(board_config)
-		self.df = pd.DataFrame(columns=["ch", "times", "voltage_count_curves"])
 		if(os.path.isfile(self.measurement_config["calibration_file"])):
-			self.df = pd.read_hdf(self.measurement_config["calibration_file"])
+			in_file = ROOT.TFile.Open(self.measurement_config["calibration_file"], "READ")
+			for entry in in_file.ACDC_calibration:
+				self.voltage_df = np.reshape(entry.voltage_count_curves, (30,256,256, 2))
+				self.time_df = np.reshape(entry.time_offsets, (30,256))
+				self.voltage_points = np.array(entry.voltage_points, dtype=np.int32)
+			
 			print("Calibration file loaded.")
+		else:
+			print("Calibration file not found, creating new calibration file.")
+			self.voltage_df = np.zeros((30,256,256, 2), dtype=np.float64)
+			self.time_df = np.zeros((30,256), dtype=np.float64)
+			self.voltage_points = np.array(256, dtype=np.int32)#Just a single number wrapped, the number of voltage points.
+		self.output_file = ROOT.TFile.Open(self.measurement_config["calibration_file"], "RECREATE")#Overwrite the existing file, if any.
+		self.top_level = ROOT.TTree("ACDC_calibration", "ACDC_calibration")
+		self.top_level.Branch('voltage_points', self.voltage_points, 'voltage_points/I')
+		self.top_level.Branch('voltage_count_curves', self.voltage_df, 'voltage_count_curves[30][256][256][2]/D')#voltage_count_curves is a 4d array of size 30(channels)*256(# of capacitors)*[sample voltage, corresponding ADC count], # of measurement points typically being 256 and equally distributed between 0v and vdd.
+		self.top_level.Branch('time_offsets', self.time_df, 'time_offsets[30][256]/D')	
 		self.trigger_pos = []
-		
 	def sine(x, A, B, omega, phi):
 		return A * np.sin(omega*x + phi) + B
 
@@ -103,7 +117,7 @@ class Util:
 	
 	def load_config(fn):
 		if(fn is None):
-			print("No calibration measurement config provided, loading default configuration")
+			print("No Util.py config provided, loading default configuration")
 			return Util.load_config("configs/calib_measurement_config.yml")
 
 		with open(fn, "r") as stream:
@@ -113,7 +127,8 @@ class Util:
 				print("Had an exception while reading yaml file for util config: %s"%exc)
 
 	def save(self):
-		self.df.to_hdf(self.measurement_config["calibration_file"], "calibration_jin", "w")
+		self.top_level.Fill()#Save data entries
+		self.top_level.Write()#Save Root file header
 		#pickle.dump(voltage_curve, open(self.measurement_config["voltage_curve"]["output"], "wb"))
 		#pd.DataFrame(self.voltage_curve).to_hdf(self.measurement_config["voltage_curve"]["output"]) Cannot output 3d array to hdf5 file?!!
 	
@@ -127,10 +142,8 @@ class Util:
 			#voltage_curve.append([np.full((30,256), i), np.full((30,256), i)])
 			print(i)
 		#voltage_curve is a list of size (# of measurement points), each measurement point is a 2x30(ch)x256(# of capacitors) array of voltage values.
-		voltage_curve = np.array(voltage_curve).transpose(2,3,0,1)
-		#self.df is a dataframe with 30 rows of voltage_count_curves, which is an array of 256(# of capacitors)*(# of measurement points)*[voltage, ADC count], # of measurement points typically being 256.
-		for i in range(30):
-			self.df.loc[i, "voltage_count_curves"] = voltage_curve[i]
+		voltage_curve = np.array(voltage_curve, dtype=np.float64).transpose(2,3,0,1) #Transpose so that the index order matches with voltage_df.
+		self.voltage_df[:] = voltage_curve#Keep the address to the array the same so that TTree can read it.
 		self.save()
 	#Deprecated
 	def find_trigger_pos2(self, sineData):
@@ -287,8 +300,7 @@ class Util:
 			print(timebase[channel])
 			print(sum(timebase[channel]))
 		
-		for i in range(30):
-			self.df.at[i, "times"] = timebase[i]
+		self.time_df[:] = timebase#Keep the address to the array the same so that TTree can read it.
 		self.save()
 		return sineData, trigger_pos
 #Reads a raw data file and saves a timebase calibration file.
@@ -298,11 +310,10 @@ class Util:
 		true_freq = self.measurement_config["timebase"]["true_freq"]#Frequency of the signal source used for timebase measurement.
 		nevents = self.measurement_config["timebase"]["nevents"]
 		#Find trigger position
-		
-		trigger_pos = self.find_trigger_pos(sineData)
+		#trigger_pos = self.find_trigger_pos(sineData)
 		ydata = sineData
 		ydata2 = np.concatenate((ydata, ydata, ydata), axis=2)
-		timebase = np.zeros((30, 256))
+		timebase = np.zeros((30, 256), dtype=np.float64)
 		
 		for channel in self.measurement_config["timebase"]["channels"]:
 			a_matrix = []
@@ -353,10 +364,9 @@ class Util:
 				y_matrix.append(np.array(chTimeOffsetMatrix))
 				w_matrix.append(np.array(chTimeVarMatrix))
 			timebase[channel] = np.linalg.lstsq(np.divide(np.concatenate(a_matrix, axis=0),np.concatenate(w_matrix, axis=0)), np.divide(np.concatenate(y_matrix, axis=None),np.concatenate(w_matrix, axis=0).squeeze()), rcond=None)[0].squeeze()
-		for i in range(30):
-			self.df.at[i, "times"] = timebase[i]
+		self.time_df[:] = timebase#Keep the address to the array the same so that TTree can read it.
 		self.save()
-		return sineData, trigger_pos
+		return sineData
 	#Reads a raw data file and saves a timebase calibration file.
 	def create_timebase_first_order(self):
 		
@@ -931,7 +941,7 @@ class Util:
 		for j in range(0, 30):
 			voltageLin.append([])
 			for i in range(0, 256):
-				meanList = Util.savitzky_golay(self.df.loc[j, "voltage_count_curves"][i, :, 1], 41, 2)
+				meanList = Util.savitzky_golay(self.voltage_df[j, i, :, 1], 41, 2)
 				#meanList[meanList<0] = 0
 				voltageLin[j].append(scipy.interpolate.interp1d(meanList, refVoltage))
 		#xv = np.array([acd for acd in range(4096)])

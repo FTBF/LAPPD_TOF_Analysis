@@ -46,7 +46,7 @@ class Acdc:
 		#voltage_linearization() function reconstructs actual voltage waveform from ADC count waveform utilizing inverse function theorem(??? -JIN)
 		#"voltage_count_curves": 256(# of capacitors)*[[voltage, ADC count]*(# of measurement points)], # of measurement points typically being 256.
 		self.columns = ["ch", "waveform", "position", "len_cor", "times", "wraparound", "pedestal_counts", "voltage_count_curves"]
-		self.df = pd.DataFrame(columns=self.columns)
+		self.df = pd.DataFrame(columns=self.columns)#TODO: Replace Pandas dataframe with dictionaries and/or numpy arrays. -JIN-
 		#one channel is special, used for synchronization, so we keep it separate 
 		self.sync_ch = 0
 		self.sync_dict = {"ch": self.sync_ch, "waveform": None, "times": None, "wraparound": None} #similar columns as df, currently hard coding the sync channel as "0"
@@ -170,6 +170,7 @@ class Acdc:
 			for e in a.cur_event_count:
 				a.event_numbers.append(e)#Right now, first event in the dataframe is event 0, second is event 1, etc. TODO: assign event numbers appropriately after coincidence check.
 
+		#TODO: add another layer of abstraction: station level, which does not process raw waveform. -JIN-
 		#do math to look at coincidence of clocks. 
 		return 0 #or 1, or a list of those that are in coincidence vs those that are not.
 

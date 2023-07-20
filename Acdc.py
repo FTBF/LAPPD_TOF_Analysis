@@ -2,6 +2,7 @@ import numpy as np
 import pandas as pd
 import bitstruct.c as bitstruct
 from matplotlib import pyplot as plt
+from matplotlib import colors
 import scipy
 from scipy.interpolate import splrep, BSpline, CubicSpline
 
@@ -119,7 +120,6 @@ class Acdc:
 		#now turn the "ch" column into the indices for this dataframe
 		self.df = self.df.set_index("ch")
 
-
 	def import_raw_data(self, raw_data_path_list, is_pedestal_data=False):
 		"""Imports binary LAPPD data into ACDC object.
 		Arguments:
@@ -211,6 +211,10 @@ class Acdc:
 
 		# Subtracts pedestal_counts from the waveform data for each event (subtracts by broadcasting the 2D pedestal_counts array to the 3D cur_waveforms_raw array)
 		self.cur_waveforms = self.cur_waveforms_raw - self.pedestal_counts
+		
+		# Have to rearrange channels
+		channels = np.array([5,4,3,2,1,0,11,10,9,8,7,6,17,16,15,14,13,12,23,22,21,20,19,18,29,28,27,26,25,24])
+		self.cur_waveforms = self.cur_waveforms[:,channels,:]
 
 		return
 	
@@ -267,6 +271,41 @@ class Acdc:
 		y_data_list = self.cur_waveforms[event,channels,:].reshape(len(channels), -1)
 		y_data_raw_list = self.cur_waveforms_raw[event,channels,:].reshape(len(channels), -1)
 
+		time_domain = np.linspace(0, 0.0000255, 256)
+
+		# Plots the corrected ADC data
+		fig, (ax1, ax2) = plt.subplots(2, 1)
+		for channel, y_data in enumerate(y_data_list):
+
+			ax1.plot(time_domain*1e6, y_data, label='Channel %i'%channel)
+
+			y_data_1 = self.high_pass_filt(y_data, .5, 10)
+
+			ax1.plot(time_domain*1e6, y_data_1, label='Channel %i'%channel)
+
+			y_data_2 = self.low_pass_filt(y_data, .5 , 10)
+
+			ax1.plot(time_domain*1e6, y_data_2, label='Channel %i'%channel)
+
+			# ax1.plot(time_domain*1e6, (y_data+y_data_2)*60)
+
+		ax1.set_xlabel("Time sample (ns)")
+		ax1.set_ylabel("ADC count (ped corrected)")
+		ax1.tick_params(right=True, top=True)
+
+		# Plots the raw ADC data
+		for channel, y_data in enumerate(y_data_raw_list):
+			ax2.plot(time_domain*1e6, y_data, label="Channel %i"%channel)
+		ax2.set_xlabel("Time sample (ns)")
+		ax2.set_ylabel("ADC count (raw)")
+		ax2.tick_params(right=True, top=True)
+
+		fig.tight_layout()
+		plt.show()
+
+		return
+
+
 		# Plots the corrected ADC data
 		fig, (ax1, ax2) = plt.subplots(2, 1)
 		for channel, y_data in enumerate(y_data_list):
@@ -287,6 +326,22 @@ class Acdc:
 
 		return
 
+	def plot_raw_lappd(self, event):
+
+		waveform = self.cur_waveforms[event]
+
+		xdata = np.linspace(0,255,256)
+		ydata = np.linspace(0,29,30)
+
+		fig, ax = plt.subplots()
+
+		norm = colors.CenteredNorm()
+		ax.pcolormesh(xdata, ydata, waveform, norm=norm, cmap='bwr')
+
+		plt.show()
+
+		return
+
 	def find_event_centers(self, events=None):
 		"""xxx add description
 
@@ -303,8 +358,15 @@ class Acdc:
 		for waveform in waveforms:
 
 			try:
-				l_pos = self.find_l_pos_spline(waveform)
-				t_pos = self.find_t_pos()
+				
+				largest_ch = self.largest_signal_ch(waveform)
+				l_pos_y_data = waveform[largest_ch]
+
+				# l_pos = self.find_l_pos_cfd(l_pos_y_data)
+				l_pos = self.find_l_pos_spline(l_pos_y_data)
+
+				# t_pos = self.find_t_pos_simple(waveform)
+				t_pos = self.find_t_pos_ls_gauss(waveform)
 
 			except:
 				num_skipped_waveforms
@@ -312,17 +374,52 @@ class Acdc:
 
 		return
 	
-	def find_l_pos_spline(self, waveform):
+	def largest_signal_ch(self, waveform):
+		"""Small helper function to retrieve the channel to be used in the find_l_pos functions.
+		Arguments:
+			(Acdc) self
+			(np.array) waveform: a single event's waveform (2D array) from which the optimal channel will be found		
+		"""
+
+		return np.absolute(waveform).max(axis=1).argmax()
+	
+	def find_l_pos_cfd(self, y_data):
+		"""xxx add description
+		
+		"""
+
+		x_data = np.linspace(0,255,256)		
+
+		shift = 7
+
+		y_data_shift = np.roll(y_data, shift)
+		y_data_shift[0:shift] = np.zeros(shift)
+
+		atten = 0.1
+		y_data = -1*atten*y_data
+
+		new_data = y_data + y_data_shift
+
+		fig, ax = plt.subplots()
+
+		ax.plot(x_data, y_data, label='Atten. inv.')
+		ax.plot(x_data, y_data_shift, label='Delayed')
+		ax.plot(x_data, new_data, label='Sum')
+
+		ax.legend()
+
+		plt.show()
+
+		return
+
+	def find_l_pos_spline(self, ydata):
 		"""Finds the longitudinal position (l_pos) of the incident particle using a spline fitting method.
 		xxx add more
 		
 		"""
 
-		pos_waveform = -1*waveform
-		
 		xdata = np.linspace(0, 255, 256)
-		largest_signal_channel = pos_waveform.max(axis=1).argmax()
-		ydata = pos_waveform[largest_signal_channel]
+		ydata = -1*ydata
 
 		height_cutoff = 0.5*ydata.max()
 		distance_between_peaks = 20
@@ -356,19 +453,63 @@ class Acdc:
 		peaks_precise = np.array(peaks_precise)
 		l_pos = self.convert_cap_to_t_pos(peaks_precise)
 		
-		return
+		return l_pos
 	
-	def convert_cap_to_t_pos(self, peaks):
-		"""xxx add description
-		xxx edit the return statement
+	def find_t_pos_simple(self, waveform):
+		return self.largest_signal_ch(waveform)
+
+	def find_t_pos_ls_gauss(self, waveform, display=False):
+		"""xxx
+		
 		"""
 
-		return peaks
+		xmin = 0
+		xmax = 29
+		xdata = np.linspace(xmin, xmax, xmax-xmin+1)
+		ydata = (-1)*waveform.min(axis=1)
 
-	def find_t_pos(self):
+		def gauss_const_back(x, N, sigma, mu, A):
+			return (N/(sigma*np.sqrt(2*np.pi)))*np.exp(-0.5*((x-mu)/sigma)**2) + A
+		
+		N_guess = 10*max(ydata)
+		sigma_guess = 0.1*(xdata[-1]-xdata[0])
+		mu_guess = 0.5*(xdata[-1]+xdata[0])
+		A_guess = min(ydata)
+		p0 = [N_guess, sigma_guess, mu_guess, A_guess]
+		popt, pcov = scipy.optimize.curve_fit(gauss_const_back, xdata, ydata, p0=p0)
 
-		return
+		if display:
+
+			domain = np.linspace(xmin, xmax, 200)
+
+			fig, ax = plt.subplots()
+			ax.scatter(xdata, ydata, label='Raw')
+			# ax.plot(domain, gauss_const_back(domain, *p0), label='p0')
+			ax.plot(domain, gauss_const_back(domain, *popt), label='popt')
+			ax.legend()
+			plt.show()
+
+		return popt[2]
+
+	def butter_pass(self, cutoff, sampling_rate, bytpe, order=5):
+		nyq = 0.5 * sampling_rate
+		normal_cutoff = cutoff / nyq
+		sos = scipy.signal.butter(N=order, Wn=cutoff, fs=sampling_rate, btype=bytpe, analog=False, output='sos')
+		return sos
+
+	def high_pass_filt(self, data, cutoff, sampling_rate, order=2):
+
+		sos = self.butter_pass(cutoff, sampling_rate, 'hp', order=order)
+		y = scipy.signal.sosfilt(sos, data)
+		
+		return y
 	
+	def low_pass_filt(self, data, cutoff, sampling_rate, order=2):
+
+		sos = self.butter_pass(cutoff, sampling_rate, 'lp', order=order)
+		y = scipy.signal.sosfilt(sos, data)
+		
+		return y
 
 	#the calibration file is an .h5 file that holds a pandas dataframe
 	#that has the same dataframe structure as is listed above for self.df. 
@@ -487,7 +628,11 @@ if __name__=='__main__':
 
 	# test_acdc.hist_single_cap_counts_vs_ped(10, 22)
 
-	# test_acdc.plot_ped_corrected_pulse(154)
+	# test_acdc.plot_ped_corrected_pulse(154, channels=12)
+
+	# test_acdc.plot_raw_lappd(350)
+
+	time_domain = np.linspace(0, 0.0000255, 256)
 
 	test_acdc.find_event_centers()
 	

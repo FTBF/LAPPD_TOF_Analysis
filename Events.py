@@ -12,7 +12,7 @@ import uproot
 
 #Now with root ttree instead of pandas dataframe.
 
-class Event:
+class Events:
 	def __init__(self, num = None, acdcs=None):
 
 		self.acdcs = acdcs #class is only passed the acdcs that are selected as active by the GUI. 
@@ -32,6 +32,10 @@ class Event:
 			self.red_cols[station + " Y"] = uproot.newbranch(np.float64) #y reconstructed position
 			self.red_cols[station + " dX"] = uproot.newbranch(np.float64) #uncertainty in x position
 			self.red_cols[station + " dY"] = uproot.newbranch(np.float64) #uncertainty in y position
+			self.red_cols[station + " Theta"] = uproot.newbranch(np.float64) #theta reconstructed angle, two or more positions required
+			self.red_cols[station + " dTheta"] = uproot.newbranch(np.float64) #uncertainty in theta
+			self.red_cols[station + " Phi"] = uproot.newbranch(np.float64) #phi reconstructed angle, two or more positions required
+			self.red_cols[station + " dPhi"] = uproot.newbranch(np.float64) #uncertainty in phi
 			self.red_cols[station + " T"] = uproot.newbranch(np.float64) #time of arrival, ps
 			self.red_cols[station + " dT"] = uproot.newbranch(np.float64)#uncertainty in t
 			self.red_cols[station + " Total Charge"] = uproot.newbranch(np.float64) #sum of integrated channel waveforms

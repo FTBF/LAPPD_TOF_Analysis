@@ -354,6 +354,8 @@ class Acdc:
 			events = convert_to_list(events)
 			waveforms = self.cur_waveforms[events,:,:]
 
+		centers = []
+
 		num_skipped_waveforms = 0
 		for waveform in waveforms:
 
@@ -362,17 +364,25 @@ class Acdc:
 				largest_ch = self.largest_signal_ch(waveform)
 				l_pos_y_data = waveform[largest_ch]
 
-				# l_pos = self.find_l_pos_cfd(l_pos_y_data)
-				l_pos = self.find_l_pos_spline(l_pos_y_data)
+				l_pos = self.find_l_pos_cfd(l_pos_y_data)
+				# l_pos = self.find_l_pos_spline(l_pos_y_data)
 
 				# t_pos = self.find_t_pos_simple(waveform)
 				t_pos = self.find_t_pos_ls_gauss(waveform)
 
+				centers.append((l_pos, t_pos))
+
 			except:
 				num_skipped_waveforms
 				pass
+				
+			exit()
 
-		return
+		centers = np.array(centers)		
+		selection = centers[:,0] > 16
+		centers[:,0][selection] = 25 - centers[:,0][selection]
+
+		return centers
 	
 	def largest_signal_ch(self, waveform):
 		"""Small helper function to retrieve the channel to be used in the find_l_pos functions.
@@ -450,8 +460,12 @@ class Acdc:
 			
 			peaks_precise.append(extrema)
 		
+
 		peaks_precise = np.array(peaks_precise)
-		l_pos = self.convert_cap_to_t_pos(peaks_precise)
+
+		# Thinking this needs to change (more precise)
+		peaks_precise = peaks_precise*25/256
+		l_pos = peaks_precise.max()-peaks_precise.min()
 		
 		return l_pos
 	
@@ -491,6 +505,27 @@ class Acdc:
 
 		return popt[2]
 
+	def plot_centers(self, centers):
+
+		mm_per_ns = 72
+		offset_in_ns = 3.5
+		mm_per_strip = 6.6
+		print(type(centers))
+
+		fig, ax = plt.subplots()
+		fig.set_size_inches([10.5,8])
+		#ax1.hist(centers[:,1], bins=np.linspace(0, 30, 31))
+		xbins = (np.linspace(3.5, 6.5, 26)-offset_in_ns)*mm_per_ns
+		ybins = np.linspace(0, 30, 31)*mm_per_strip
+		h = ax.hist2d((centers[:,0]-offset_in_ns)*mm_per_ns,centers[:,1]*mm_per_strip, bins=(xbins, ybins))#, norm=matplotlib.colors.LogNorm())
+		ax.set_xlabel("dt(pulse, reflection)*v [mm]")
+		ax.set_ylabel("Y position (perpendicular to strips) [mm]")
+		fig.colorbar(h[3], ax=ax)
+		plt.show()
+
+		return
+	
+	
 	def butter_pass(self, cutoff, sampling_rate, bytpe, order=5):
 		nyq = 0.5 * sampling_rate
 		normal_cutoff = cutoff / nyq
@@ -632,9 +667,10 @@ if __name__=='__main__':
 
 	# test_acdc.plot_raw_lappd(350)
 
-	time_domain = np.linspace(0, 0.0000255, 256)
+	# time_domain = np.linspace(0, 0.0000255, 256)
 
-	test_acdc.find_event_centers()
+	centers = test_acdc.find_event_centers(events=450)
+	test_acdc.plot_centers(centers)
 	
 	exit()
 

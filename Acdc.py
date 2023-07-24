@@ -5,6 +5,7 @@ from matplotlib import pyplot as plt
 from matplotlib import colors
 import scipy
 from scipy.interpolate import splrep, BSpline, CubicSpline
+import uproot
 
 
 # Some quick helper functions
@@ -57,6 +58,7 @@ class Acdc:
 		self.pedestal_counts = init_data_dict['pedestal_counts']	# ADC count; a list of 256 integers, which corresponds to each capicitors of VCDL.
 		self.pedestal_voltage = init_data_dict['pedestal_voltage']
 		self.voltage_count_curves = init_data_dict['voltage_count_curves']
+		self.calib_data_file_path = init_data_dict['calib_data_file_path']
 
 		self.cur_times, self.cur_times_320, self.cur_waveforms_raw, self.cur_waveforms = None, None, None, None
 		# Imports waveform data if a path was specified upon Acdc initialization
@@ -200,7 +202,7 @@ class Acdc:
 		# Still returns relevant data
 		return times_320, times, data
 	
-	def process_raw_data(self):
+	def process_raw_data_old_pedestal(self):
 		"""Cleans up raw waveform data. Current implementation simply subtracts of average pedestal ADC count of each capacitor in each channel. Future implementations will use voltage_count_curves and interpolation to correct ADC counts and convert to voltage.
 		Arguments:
 			(Acdc) self		
@@ -218,6 +220,71 @@ class Acdc:
 
 		return
 	
+	def process_raw_data(self):
+
+		if self.calib_data_file_path is None:
+			return
+		
+		# imports the numpy array from the root file by traversing file tree, reading data as a np array, and reshaping to (#channels,
+		# 	#capacitors, #voltages, (voltage, adc))
+		in_file = uproot.open(self.calib_data_file_path)
+		voltage_counts = np.reshape(in_file["config_tree"]["voltage_count_curves"].array(library="np"), (30,256,256,2))
+
+		# have to normalize since we get voltage as a value on [0,4096]
+		voltage_counts[:,:,:,0] = voltage_counts[:,:,:,0]*1.2/4096.
+		
+		def lineraize_wrap(f, val):
+			try:
+				return f(val)
+			except(ValueError):
+				if val < 2000:
+					return 0
+				else:
+					return 3.3
+
+		
+		self.cur_waveforms = np.empty_like(self.cur_waveforms_raw)
+
+		voltageLin = []
+		for ch in range(0, 30):
+			voltageLin.append([])
+			for cap in range(0, 256):
+
+				single_voltage_counts = voltage_counts[ch, cap, :, :]
+
+				# for each channel and each capacitor, applies the Savitzky-Golay filter to ADC data to smooth it out, returning same data but adjusted with 
+				#	the smoothing applied
+				single_voltage_counts[:, 1] = scipy.signal.savgol_filter(single_voltage_counts[:, 1], 41, 2)
+				voltage_count_sorted = single_voltage_counts[single_voltage_counts[:, 1].argsort()]
+
+				print(voltage_count_sorted[:,1])
+				print(voltage_count_sorted[:,0])
+
+				self.cur_waveforms[:,ch,cap] = np.interp(self.cur_waveforms_raw[:,ch,cap], voltage_count_sorted[:,1], voltage_count_sorted[:,0])
+				print(self.cur_waveforms_raw[:,ch,cap])
+				print(self.cur_waveforms[:,ch,cap])
+
+				fig, ax = plt.subplots()
+
+				ax.plot(voltage_count_sorted[:,1], voltage_count_sorted[:,0])
+				
+				plt.show()
+
+				exit()
+		
+		# fig, ax = plt.subplots()
+
+		# event, ch = 600, 15
+		# normalized_adc_data = self.cur_waveforms_raw[event, ch, :]
+		# normalized_adc_data = normalized_adc_data/normalized_adc_data.min()
+
+		# normalized_voltage_data = self.cur_waveforms[event, ch, :]
+		# normalized_voltage_data = 
+
+		# plt.show()
+
+		return
+
 	def hist_single_cap_counts_vs_ped(self, ch, cap):
 		"""Plots a histogram of ADC counts for a single capacitor in a channel for all events recorded in the binary file. Also plots a histogram for the pedestal ADC counts of the same capacitor.
 		Arguments:
@@ -279,13 +346,13 @@ class Acdc:
 
 			ax1.plot(time_domain*1e6, y_data, label='Channel %i'%channel)
 
-			y_data_1 = self.high_pass_filt(y_data, .5, 10)
+			# y_data_1 = self.high_pass_filt(y_data, .5, 10)
 
-			ax1.plot(time_domain*1e6, y_data_1, label='Channel %i'%channel)
+			# ax1.plot(time_domain*1e6, y_data_1, label='Channel %i'%channel)
 
-			y_data_2 = self.low_pass_filt(y_data, .5 , 10)
+			# y_data_2 = self.low_pass_filt(y_data, .5 , 10)
 
-			ax1.plot(time_domain*1e6, y_data_2, label='Channel %i'%channel)
+			# ax1.plot(time_domain*1e6, y_data_2, label='Channel %i'%channel)
 
 			# ax1.plot(time_domain*1e6, (y_data+y_data_2)*60)
 
@@ -364,7 +431,10 @@ class Acdc:
 				largest_ch = self.largest_signal_ch(waveform)
 				l_pos_y_data = waveform[largest_ch]
 
-				l_pos = self.find_l_pos_cfd(l_pos_y_data)
+				self.plot_ped_corrected_pulse(event=events, channels=largest_ch)
+
+				# l_pos = self.find_l_pos_cfd(l_pos_y_data)
+				l_pos = self.find_l_pos_autocor(l_pos_y_data)
 				# l_pos = self.find_l_pos_spline(l_pos_y_data)
 
 				# t_pos = self.find_t_pos_simple(waveform)
@@ -469,6 +539,49 @@ class Acdc:
 		
 		return l_pos
 	
+	def find_l_pos_autocor(self, ydata):
+		"""xxx fill in description
+		
+		"""
+
+		fig, ax = plt.subplots()
+
+		domain = np.linspace(0,255,256)
+
+		integrals = []
+		maxs = []
+		lags = []
+
+		lag = 0
+		while lag < 256:
+
+			ydata_shifted = np.copy(ydata)	# make sure not to change ydata
+
+			if lag != 0:
+				ydata_shifted[-lag:] = 0
+
+			ydata_shifted = np.roll(ydata_shifted, lag)
+			auto_cor_func = ydata*ydata_shifted
+			ax.plot(domain, auto_cor_func)
+
+			integrals.append(scipy.integrate.trapezoid(auto_cor_func, domain))
+			maxs.append(auto_cor_func.max())
+			lags.append(lag)
+
+			lag += 5
+
+		fig2, ax2 = plt.subplots()
+		ax2.plot(lags, integrals)
+		ax2.scatter(lags, integrals)
+
+		fig3, ax3 = plt.subplots()
+		ax3.plot(lags, maxs)
+		ax3.scatter(lags, maxs)
+
+		plt.show()
+
+		return
+
 	def find_t_pos_simple(self, waveform):
 		return self.largest_signal_ch(waveform)
 
@@ -650,7 +763,8 @@ if __name__=='__main__':
 		'pedestal_data_path': r'/home/cameronpoe/Desktop/lappd_tof_container/testData/Raw_testData_20230615_164912_b0.txt',
 		'pedestal_counts': None,
 		'pedestal_voltage': None,
-		'voltage_count_curves': None
+		'voltage_count_curves': None,
+		'calib_data_file_path': r'/home/cameronpoe/Desktop/lappd_tof_container/testData/test.root'
 	}
 
 	data_path = r'/home/cameronpoe/Desktop/lappd_tof_container/testData/Raw_testData_20230615_170611_b0.txt'
@@ -659,17 +773,19 @@ if __name__=='__main__':
 
 	test_acdc.import_raw_data(data_path)
 
+	# test_acdc.linearize_voltage()
+
 	# print(test_acdc.cur_times)
 
 	# test_acdc.hist_single_cap_counts_vs_ped(10, 22)
 
-	# test_acdc.plot_ped_corrected_pulse(154, channels=12)
+	test_acdc.plot_ped_corrected_pulse(154, channels=12)
 
 	# test_acdc.plot_raw_lappd(350)
 
 	# time_domain = np.linspace(0, 0.0000255, 256)
 
-	centers = test_acdc.find_event_centers(events=450)
+	centers = test_acdc.find_event_centers(events=400)
 	test_acdc.plot_centers(centers)
 	
 	exit()

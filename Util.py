@@ -12,7 +12,7 @@ import matplotlib.pyplot as plt
 import multiprocessing as mp
 import os.path
 import sys
-import ROOT
+import uproot
 from datetime import date
 #Util Class is used for generating board calibration files and various measurements that are not directly used in TOF analysis.
 #1. Voltage curve calibration file.
@@ -24,23 +24,16 @@ class Util:
 	def __init__(self, board_config=None):
 		self.measurement_config = Util.load_config(board_config)
 		if(os.path.isfile(self.measurement_config["calibration_file"])):
-			in_file = ROOT.TFile.Open(self.measurement_config["calibration_file"], "READ")
-			for entry in in_file.ACDC_calibration:
-				self.voltage_df = np.reshape(entry.voltage_count_curves, (30,256,256, 2))
-				self.time_df = np.reshape(entry.time_offsets, (30,256))
-				self.voltage_points = np.array(entry.voltage_points, dtype=np.int32)
+			in_file = uproot.open(self.measurement_config["calibration_file"])
+			
+			self.voltage_df = np.reshape(in_file["config_tree"]["voltage_count_curves"].array(library="np"), (30,256,256, 2))
+			self.time_df = np.reshape(in_file["config_tree"]["time_offsets"].array(library="np"), (30,256))
 			
 			print("Calibration file loaded.")
 		else:
 			print("Calibration file not found, creating new calibration file.")
 			self.voltage_df = np.zeros((30,256,256, 2), dtype=np.float64)
 			self.time_df = np.zeros((30,256), dtype=np.float64)
-			self.voltage_points = np.array(256, dtype=np.int32)#Just a single number wrapped, the number of voltage points.
-		self.output_file = ROOT.TFile.Open(self.measurement_config["calibration_file"], "RECREATE")#Overwrite the existing file, if any.
-		self.top_level = ROOT.TTree("ACDC_calibration", "ACDC_calibration")
-		self.top_level.Branch('voltage_points', self.voltage_points, 'voltage_points/I')
-		self.top_level.Branch('voltage_count_curves', self.voltage_df, 'voltage_count_curves[30][256][256][2]/D')#voltage_count_curves is a 4d array of size 30(channels)*256(# of capacitors)*[sample voltage, corresponding ADC count], # of measurement points typically being 256 and equally distributed between 0v and vdd.
-		self.top_level.Branch('time_offsets', self.time_df, 'time_offsets[30][256]/D')	
 		self.trigger_pos = []
 	def sine(x, A, B, omega, phi):
 		return A * np.sin(omega*x + phi) + B
@@ -127,10 +120,9 @@ class Util:
 				print("Had an exception while reading yaml file for util config: %s"%exc)
 
 	def save(self):
-		self.top_level.Fill()#Save data entries
-		self.top_level.Write()#Save Root file header
-		#pickle.dump(voltage_curve, open(self.measurement_config["voltage_curve"]["output"], "wb"))
-		#pd.DataFrame(self.voltage_curve).to_hdf(self.measurement_config["voltage_curve"]["output"]) Cannot output 3d array to hdf5 file?!!
+		output_file = uproot.recreate(self.measurement_config["calibration_file"])#Overwrite the existing file, if any.
+		top_level = {"voltage_count_curves":self.voltage_df, "time_offsets":self.time_df}
+		output_file["config_tree"] = top_level
 	
 	#Reads a series of raw data files and saves a voltage curve calibration file.
 	def create_voltage_curve(self):

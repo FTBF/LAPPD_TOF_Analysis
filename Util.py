@@ -297,17 +297,14 @@ class Util:
 		return sineData, trigger_pos
 #Reads a raw data file and saves a timebase calibration file.
 	def create_timebase_weighted(self):
-		sineData = Util.getDataRaw([self.measurement_config["timebase"]["input"]])[2]
-		sineData = self.linearize_voltage(sineData) - 1.2/4096*self.measurement_config["timebase"]["pedestal"]
-		true_freq = self.measurement_config["timebase"]["true_freq"]#Frequency of the signal source used for timebase measurement.
-		nevents = self.measurement_config["timebase"]["nevents"]
-		#Find trigger position
-		#trigger_pos = self.find_trigger_pos(sineData)
-		ydata = sineData
-		ydata2 = np.concatenate((ydata, ydata, ydata), axis=2)
-		timebase = np.zeros((30, 256), dtype=np.float64)
-		
 		for channel in self.measurement_config["timebase"]["channels"]:
+			sineData = Util.getDataRaw([self.measurement_config["timebase"]["prefix"]+str(channel)+self.measurement_config["timebase"]["suffix"]])[2]
+			sineData = self.linearize_voltage(sineData) - 1.2/4096*self.measurement_config["timebase"]["pedestal"]
+			true_freq = self.measurement_config["timebase"]["true_freq"]#Frequency of the signal source used for timebase measurement.
+			nevents = self.measurement_config["timebase"]["nevents"]
+			ydata = sineData
+			ydata2 = np.concatenate((ydata, ydata, ydata), axis=2)
+			timebase = np.zeros((30, 256), dtype=np.float64)
 			a_matrix = []
 			y_matrix = []
 			w_matrix = []

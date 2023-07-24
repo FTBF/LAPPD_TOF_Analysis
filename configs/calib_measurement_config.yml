@@ -1,5 +1,5 @@
 calibration_file: configs/0/test.root #A calibration file to save measurement results. You may override existing calibration.
-tasks: ovw #r: raw data, p: linearized plot, v: voltage curve, t:timebase, T:timebase first order j:phase jittering calculation, l: first order timebase correction
+tasks: ovw #r: raw data, p: linearized plot, v: voltage curve, t:timebase, T:timebase first order j:phase jittering calculation, l: first order timebase correction, w: weighted timebase correction
 plot:
   event: 20
   pedestal: 0x800
@@ -8,12 +8,13 @@ voltage_curve:
   start: 0x000
   step: 0x010
   end: 0xfff
-  prefix: configs/0/scan_pedestals_ #configs/0/Raw_testData_scan_pedestals_
+  prefix: configs/0/scan_pedestals_ ##Final file name: prefix_(pedvalue in decimal)_suffix
   suffix: "" #_20220817_052515_b0.txt
 
 timebase:
-  channels: [11, 17, 23, 29]
+  channels: [0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29]#channels to be used for timebase calculation
   nevents: 10000
   true_freq: 250000000 #243184495 #True frequency of the sine wave source.
   pedestal: 0x800 #Pedestal voltage during measurement.
-  input: testData/WR_5way_4
+  prefix: configs/0/scan_pedestals_ #Final file name: prefix_(chnum)_suffix
+  suffix: "" #_20220817_052515_b0.txt

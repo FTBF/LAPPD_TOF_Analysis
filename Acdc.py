@@ -55,11 +55,16 @@ class Acdc:
 		self.initialize_dataframe()
 
 		#metadata dictionary from the loader of the raw files, holds clock/counter information
-		self.metadata = {} #todo: fill in, input from Joe
+		self.cur_times = 0 #s, timestamp of the currently loaded waveform
+		self.cur_times_320 = 0 #clock cycles, timestamp of the currently loaded waveform
+		self.cur_event_count = 0 #event count of the currently loaded waveform
+		self.event_numbers = [] #list of event numbers, in order, for the currently loaded waveform.
 
 		#general parameters for use in analysis
 		self.vel = 0.18 #mm/ps, average (~500 MHz - 1GHz) propagation velocity of the strip 
-		self.dt = 1.0/(40e6*256) #picoseconds, sampling time interval, 1/(clock to PSEC4 x number of samples) 
+		self.dt = 1.0/(40e6*256) #picoseconds, nominal sampling time interval, 1/(clock to PSEC4 x number of samples)
+		
+
 
 		if(wave_dict is None):
 			print("Initializing an empty Acdc object with no waveforms")
@@ -96,17 +101,14 @@ class Acdc:
 			strip_space = 6.9 #mm
 			for ch in chs:
 				if(ch == self.sync_ch):
-					self.sync_dict["times"] = np.arange(0, 256*self.dt, self.dt)
-					self.sync_dict["wraparound"] = 400 #ps
+					self.sync_dict["times"] = np.append(np.linspace(0, 255*self.dt, 255), 500) #picoseconds, timebase for each sample, 500ps is the wraparound time
 					continue 
 				
 				#edit the entries of the channel
 				self.df.at[ch, "waveform"] = None #load in on event loop 
 				self.df.at[ch, "position"] = strip_space*ch
 				self.df.at[ch, "len_cor"] = 0
-				self.df.at[ch, "times"] = np.arange(0, 256*self.dt, self.dt)
-				self.df.at[ch, "wraparound"] = 400 #ps
-				self.df.at[ch, "pedestal_counts"] = [0]*256
+				self.df.at[ch, "time_offsets"] = np.append(np.linspace(0, 255*self.dt, 255), 500) #picoseconds, timebase for each sample, 500ps is the wraparound time
 				self.df.at[ch, "voltage_count_curves"] = [0,0]*256
 
 		#otherwise, if a calibration file is included, use it
@@ -141,23 +143,35 @@ class Acdc:
 	#a function used by the datafile parser to update the ACDC class on an event by event basis
 	#without re-updating all of the globally constant calibration data.
 	#"waves" is a dictionary of np.arrays like waves[ch] = np.array(waveform samples)
-	def update_waveforms(self, waves):
+	def update_waveforms(self, waves, timestamps_320, timestamps):
 		#a dictionary of waveforms, with channel numbers, includes the sync wave
-		for ch in waves:
+		waves = np.array(waves)
+		self.cur_times_320 = timestamps_320
+		self.cur_times = timestamps
+		self.cur_event_count = waves.shape[0]
+		for ch in waves.shape[1]:
 			if(ch == self.sync_dict["ch"]):
-				self.sync_dict["waveform"] = waves[ch]
+				self.sync_dict["waveform"] = waves[:, ch]#TODO: check this indexing works
 				continue 
-
-			self.df.at[ch, "waveform"] = waves[ch]
+			self.df.at[ch, "waveform"] = waves[:, ch]
+			
 
 	#Correcting the raw waveform #1!
-	#JIN suggests the ACDC class should carry a chain of waveforms rather then every correction function directly acting on a single waveform variable; the former is much more traceable and debuggable.
+	#Jin suggests the ACDC class should carry a chain of waveforms rather then every correction function directly acting on a single waveform variable; the former is much more traceable and debuggable.
 	def baseline_subtract(self):
 		pass#NOT YET IMPLEMENTED
 
 	#Correcting the raw waveform #2!
 	def voltage_linearization(self):
 		pass#NOT YET IMPLEMENTED
+
+	def check_coincidence_assign_event_numbers(acdcs, window=30):
+		for a in acdcs:
+			for e in a.cur_event_count:
+				a.event_numbers.append(e)#Right now, first event in the dataframe is event 0, second is event 1, etc. TODO: assign event numbers appropriately after coincidence check.
+
+		#do math to look at coincidence of clocks. 
+		return 0 #or 1, or a list of those that are in coincidence vs those that are not.
 
 
 

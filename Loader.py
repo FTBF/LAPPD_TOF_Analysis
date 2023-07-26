@@ -5,6 +5,8 @@ import Acdc
 from datetime import datetime
 import yaml
 
+from Util import Util
+
 #Assume that the data logging script saves a new timestamped
 #file at every FTBF spill, i.e. separating each spill into a new
 #file. This Loader class is initialized on each spill_file, parses
@@ -61,22 +63,15 @@ class Loader:
 
 		spill_df = pd.DataFrame() #reduced dataframe object, culmination of all event analysis
 		#psuedo code for how to load and loop through events
-		#NOT YET IMPLEMENTED
-		for i, raw_event in enumerate(raw_events):
-			for raw_acdc in raw_event:
-				for a in self.adcds:
-					#check if the data in the raw event is an actively
-					#selected acdc/LAPPD station
-					if(a.get_acdc_id() == raw_acdc["id"]):
-						raw_waves = raw_acdc["waves"] #a dictionary of waves, raw_waves[ch] = np.array(waveform samples)
-						raw_metadata = raw_acdc["metadata"] #also can be a dictionary of metadata variables, like clock cycles
-						a.update_waveforms(raw_waves)
-						a.update_metadata(raw_metadata)
+
+		for a in self.acdcs:
+			raw_times_320, raw_times, raw_events = Util.getDataRaw([self.fn+"_"+str(a.get_acdc_id())])#TODO: specify file name
+			a.update_waveforms(raw_events, raw_times_320, raw_times) #update the waveforms for each event
 
 			#at this stage all of the ACDCs have had their waveforms updated.
 			#create an event object that holds the ACDCs and tell the event object 
 			#which analysis steps to run. 
-			e = Event.Event(num=i, acdcs=self.acdcs)
+			e = Event.Event(num=0, acdcs=self.acdcs)#we will get rid of the event class.
 			coinc = e.check_coincidence(window=30) #check metadata variables to see if there is coincidence between detectors
 			if(coinc == False):
 				continue

@@ -428,8 +428,8 @@ class Acdc:
 			except:
 				num_skipped_waveforms += 1
 				pass
-				
-		
+						
+
 		centers = np.array(centers)		
 
 		print(centers)
@@ -518,7 +518,7 @@ class Acdc:
 		peaks_precise = np.array(peaks_precise)
 
 		# Thinking this needs to change (more precise)
-		peaks_precise = peaks_precise*25/256
+		peaks_precise = peaks_precise*25./256
 		l_pos = peaks_precise.max()-peaks_precise.min()
 		
 		return l_pos
@@ -590,63 +590,90 @@ class Acdc:
 
 		fig2, ax2 = plt.subplots()
 		# ax2.plot(lags, integrals)
-		ax2.scatter(lags*25.5/256, integrals, label='Raw Data')
-		ax2.plot(peak_region_domain*25.5/256, data_bspline(peak_region_domain), label='Spline Fit', color='orange')
-		ax2.axvline(extrema*25.5/256, color='red', label=f'Extrema: {round(extrema*25.5/256, 3)} ns')
+		ax2.scatter(lags*25./256, integrals, label='Raw Data')
+		ax2.plot(peak_region_domain*25./256, data_bspline(peak_region_domain), label='Spline Fit', color='orange')
+		ax2.axvline(extrema*25./256, color='red', label=f'Extrema: {round(extrema*25./256, 3)} ns')
 		ax2.legend()
 		ax2.set_xlabel('Time delay (ns)')
 		ax2.set_ylabel('Integral value')
 
 		plt.show()
 		
-		return (25.5/256)*extrema
+		return (25./256)*extrema
 
-	def find_l_pos_autocor(self, ydata):
+	def find_l_pos_autocor(self, ydata, ver='LE_DELTA', display=True):
 		"""xxx fill in description
 		
 		"""
+
+		ver = 'CENTERED'
+		display=False
 
 		domain = np.linspace(0,255,256, dtype=int)
 
 		height_cutoff = -0.6*ydata.max()
 		distance_between_peaks = 20
 		peak_region_radius = 15
-
 		peaks_rough = scipy.signal.find_peaks(-1*ydata, height=height_cutoff, distance=distance_between_peaks)[0]
-		
 		prompt_peak, reflect_peak = np.sort(peaks_rough[ydata[peaks_rough].argsort()[0:2]])
 
-		# subtracting 12 since 12 is approximately 1.2 ns * (256/25.5). 1.2 ns is used as the rough maximum rise time 
-		#	a signal could have.
-		fit_lower_bound = prompt_peak - 12
+		if ver == 'FULL':
+			integral_lower_bound = domain[0]
+			integral_upper_bound = domain[-1]
+		elif ver == 'CENTERED':
+			integral_lower_bound = prompt_peak-10
+			integral_upper_bound = prompt_peak+10
 
-		# add a small amount to rightside of peak for the spline fit
-		fit_upper_bound = prompt_peak + 4
+			if display:
+				fig, ax = plt.subplots()
+				ax.scatter(domain[integral_lower_bound-5:integral_upper_bound+5], ydata[domain[integral_lower_bound-5:integral_upper_bound+5]], marker='.')
+				# ax.plot(np.linspace(fit_lower_bound, fit_upper_bound, 100), cubic_spline(np.linspace(fit_lower_bound, fit_upper_bound, 100)), color='orange')
+				# ax.axhline(0.1*prompt_peak_max, color='purple')
+				# ax.axhline(0.9*prompt_peak_max, color='purple')
+				ax.axvline(integral_lower_bound, color='red', label='Lower bound (10%)')
+				ax.axvline(integral_upper_bound, color='purple', label='Upper bound (90%)')
+				ax.legend()
+				ax.set_xlabel('Sample')
+				ax.set_ylabel('ADC Count')
+				ax.set_title('Integration bounds for the autocorrelation function')
 
-		ydata_subrange = ydata[fit_lower_bound:fit_upper_bound]
-		subdomain = domain[fit_lower_bound:fit_upper_bound]
+		elif 'LE' in ver:
+			# subtracting 12 since 12 is approximately 1.2 ns * (256/25.5). 1.2 ns is used as the rough maximum rise time 
+			#	a signal could have.
+			fit_lower_bound = prompt_peak - 14
 
-		spline_tuple = splrep(subdomain, ydata_subrange, k=3, s=10000)
-		bspline = BSpline(*spline_tuple)
-		dbspline = bspline.derivative()
-		cubic_spline = CubicSpline(subdomain, bspline(subdomain))
-		dcubic_spline = CubicSpline(subdomain, dbspline(subdomain))
+			# add a small amount to rightside of peak for the spline fit
+			fit_upper_bound = prompt_peak + 4
 
-		extrema = dcubic_spline.solve(0)
+			ydata_subrange = ydata[fit_lower_bound:fit_upper_bound]
+			subdomain = domain[fit_lower_bound:fit_upper_bound]
 
-		prompt_peak_max = cubic_spline(extrema[(extrema > (prompt_peak-3)) & (extrema < (prompt_peak+3))])
+			spline_tuple = splrep(subdomain, ydata_subrange, k=3, s=10000)
+			bspline = BSpline(*spline_tuple)
+			dbspline = bspline.derivative()
+			cubic_spline = CubicSpline(subdomain, bspline(subdomain))
+			dcubic_spline = CubicSpline(subdomain, dbspline(subdomain))
 
-		integral_lower_bound = cubic_spline.solve(0.1*prompt_peak_max, extrapolate=False)[0]
-		# integral_lower_bound = integral_lower_bound[]
-		integral_upper_bound = cubic_spline.solve(0.9*prompt_peak_max, extrapolate=False)[0]
+			extrema = dcubic_spline.solve(0)
 
-		# fig, ax = plt.subplots()
-		# ax.scatter(subdomain, ydata[subdomain], marker='.')
-		# ax.plot(np.linspace(fit_lower_bound, fit_upper_bound, 100), cubic_spline(np.linspace(fit_lower_bound, fit_upper_bound, 100)), color='orange')
-		# ax.axhline(0.1*prompt_peak_max, color='purple')
-		# ax.axhline(0.9*prompt_peak_max, color='purple')
-		# ax.axvline(integral_lower_bound, color='red')
-		# ax.axvline(integral_upper_bound, color='red')
+			prompt_peak_max = cubic_spline(extrema[(extrema > (prompt_peak-3)) & (extrema < (prompt_peak+3))])
+
+			integral_lower_bound = cubic_spline.solve(0.1*prompt_peak_max, extrapolate=False)[0]
+			# integral_lower_bound = integral_lower_bound[]
+			integral_upper_bound = cubic_spline.solve(0.9*prompt_peak_max, extrapolate=False)[0]
+
+			if display:
+				fig, ax = plt.subplots()
+				ax.scatter(domain[fit_lower_bound-5:fit_upper_bound+5], ydata[domain[fit_lower_bound-5:fit_upper_bound+5]], marker='.')
+				ax.plot(np.linspace(fit_lower_bound, fit_upper_bound, 100), cubic_spline(np.linspace(fit_lower_bound, fit_upper_bound, 100)), color='orange')
+				# ax.axhline(0.1*prompt_peak_max, color='purple')
+				# ax.axhline(0.9*prompt_peak_max, color='purple')
+				ax.axvline(integral_lower_bound, color='red', label='Lower bound (10%)')
+				ax.axvline(integral_upper_bound, color='purple', label='Upper bound (90%)')
+				ax.legend()
+				ax.set_xlabel('Sample')
+				ax.set_ylabel('ADC Count')
+				ax.set_title('Integration bounds for the autocorrelation function')
 
 		integrals = []
 		lags = []
@@ -672,41 +699,77 @@ class Acdc:
 
 		integrals = np.array(integrals)
 		lags = np.array(lags)
-		integral_peaks_rough = lags[scipy.signal.find_peaks(integrals, height=0.6*(integrals.max()), distance=20/lag_increment)[0]]
 
-		integral_peak_rough = integral_peaks_rough[-1]
+		if ver != 'FULL':
+			
+			integral_peaks_rough = lags[scipy.signal.find_peaks(integrals, height=0.6*(integrals.max()), distance=5/lag_increment)[0]]
 
-		integral_peak_region_cut = (lags > (integral_peak_rough-peak_region_radius)) & (lags < (integral_peak_rough+peak_region_radius))
+			if ver == 'LE_PEAK' or ver == 'CENTERED':
+				integral_peaks_rough = np.array([integral_peaks_rough[-1]])
+			
+			extremas = []
+			splines = []
+			domains = []
+			for integral_peak_rough in integral_peaks_rough:
 
-		spline_tuple = splrep(lags[integral_peak_region_cut], integrals[integral_peak_region_cut], k=3, s=10000)
-		data_bspline = BSpline(*spline_tuple)
-		ddata_bspline = data_bspline.derivative()
+				integral_peak_region_cut = (lags > (integral_peak_rough-peak_region_radius)) & (lags < (integral_peak_rough+peak_region_radius))
+
+				spline_tuple = splrep(lags[integral_peak_region_cut], integrals[integral_peak_region_cut], k=3, s=10000)
+				data_bspline = BSpline(*spline_tuple)
+				ddata_bspline = data_bspline.derivative()
+				
+				peak_region_domain_lower = integral_peak_rough-peak_region_radius
+				if peak_region_domain_lower < 0:
+					peak_region_domain_lower = 0
+
+
+				peak_region_domain = np.linspace(peak_region_domain_lower, integral_peak_rough+peak_region_radius, 100)
+				dcubic_spline = CubicSpline(peak_region_domain, ddata_bspline(peak_region_domain))
+
+				extrema = dcubic_spline.solve(0)
+
+				extrema = extrema[(extrema > (integral_peak_rough-peak_region_radius+3)) & (extrema < (integral_peak_rough+peak_region_radius-3))]
+
+				if len(extrema) > 0:
+					extrema = extrema[data_bspline(extrema).argsort()][-1]
+				else:
+					extrema = integral_peak_rough
+				
+				extremas.append(extrema)
+				splines.append(data_bspline)
+				domains.append(peak_region_domain)
+
+		extremas = np.array(extremas)
+
+		if display:
+			fig2, ax2 = plt.subplots()
+			# ax2.plot(lags, integrals)
+			ax2.scatter(lags*25./256, integrals, label='Raw Data')
+			if ver != 'FULL':
+				for i, extrema in enumerate(extremas):
+					if i == 0:
+						color1 = 'orange'
+						color2 = 'red'
+					elif i == 1:
+						color1 = '#66ff00'
+						color2 = 'pink'
+
+					ax2.plot(domains[i]*25./256, splines[i](domains[i]), label='Spline Fit', color=color1)
+					ax2.axvline(extrema*25./256, label=f'Extrema: {round(extrema*25./256, 3)} ns', color=color2)
+			ax2.legend()
+			ax2.set_xlabel('Time delay (ns)')
+			ax2.set_ylabel('Integral value')
+			if ver == 'LE_DELTA':
+				ax2.text(16.5, 6.33e6, f'$\Delta t=${round((25./256)*(extremas[1]-extremas[0]), 3)} ns', fontdict={'size': 16})
+
+			plt.show()
 		
-		peak_region_domain = np.linspace(integral_peak_rough-peak_region_radius, integral_peak_rough+peak_region_radius, 100)
-		dcubic_spline = CubicSpline(peak_region_domain, ddata_bspline(peak_region_domain))
-
-		extrema = dcubic_spline.solve(0)
-
-		extrema = extrema[(extrema > (integral_peak_rough-peak_region_radius+3)) & (extrema < (integral_peak_rough+peak_region_radius-3))]
-
-		if len(extrema) > 0:
-			extrema = extrema[data_bspline(extrema).argsort()][-1]
+		if ver == 'LE_DELTA':
+			delta_t = (25./256)*(extremas[1] - extremas[0])
 		else:
-			extrema = integral_peak_rough
-
-		# fig2, ax2 = plt.subplots()
-		# # ax2.plot(lags, integrals)
-		# ax2.scatter(lags*25.5/256, integrals, label='Raw Data')
-		# ax2.plot(peak_region_domain*25.5/256, data_bspline(peak_region_domain), label='Spline Fit', color='orange')
-		# ax2.axvline(extrema*25.5/256, color='red', label=f'Extrema: {round(extrema*25.5/256, 3)} ns')
-		# ax2.legend()
-		# ax2.set_xlabel('Time delay (ns)')
-		# ax2.set_ylabel('Integral value')
-
-		# plt.show()
+			delta_t = (25./256)*extrema
+		return delta_t
 		
-		return (25.5/256)*extrema
-
 	def find_t_pos_simple(self, waveform):
 		return self.largest_signal_ch(waveform)
 

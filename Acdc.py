@@ -4,8 +4,10 @@ import bitstruct.c as bitstruct
 from matplotlib import pyplot as plt
 from matplotlib import colors
 import scipy
+from scipy.optimize import curve_fit, fsolve, fmin
 from scipy.interpolate import splrep, BSpline, CubicSpline
 import uproot
+import pylandau
 
 
 # Some quick helper functions
@@ -50,7 +52,11 @@ class Acdc:
 		self.sync_ch = init_data_dict['sync_ch']			
 		self.strip_pos = init_data_dict['strip_pos']		# mm shape=(# channels,); local center positions of each strip relative to bottom of LAPPD
 		self.len_cor = init_data_dict['len_cor']			# mm, shape=(# channels,); a correction on the length of the strip + PCB traces per strip
+
+		# I am overriding this as self.sample_times, which I initialize to None. Will need to go back in and figure this stuff out when we know if the init_data_dict is even gonna have an option to sepcify the sample_times
 		self.times = init_data_dict['times']				# ps, xxx need better variable name and also better description imo; a list of timebase calibrated times
+		self.sample_times = []
+
 		self.wraparound = init_data_dict['wraparound']		# ps, shape=(# channels,);  a constant time associated with the delay for when the VCDL goes from the 255th cap to the 0th cap
 		self.vel = init_data_dict['vel']					# mm/ps; average (~500 MHz - 1GHz) propagation velocity of the strip
 		self.dt = init_data_dict['dt']						# ps; nominal sampling time interval, 1/(clock to PSEC4 x number of samples)
@@ -191,8 +197,7 @@ class Acdc:
 		return times_320, times, data
 	
 	def process_raw_data_via_pedestal(self):
-		"""Cleans up raw waveform data. Current implementation simply subtracts of average pedestal ADC count of each capacitor in each channel. Future implementations will use voltage_count_curves and interpolation to correct ADC counts and convert to voltage.
-		Arguments:
+		"""Cleans up raw waveform data. Current implementation simply subtracts off average pedestal ADC count of each capacitor in each channel. Future implementations will use voltage_count_curves and interpolation to correct ADC counts and convert to voltage.cw_low
 			(Acdc) self		
 		"""
 
@@ -205,6 +210,21 @@ class Acdc:
 		# Have to rearrange channels
 		channels = np.array([5,4,3,2,1,0,11,10,9,8,7,6,17,16,15,14,13,12,23,22,21,20,19,18,29,28,27,26,25,24])
 		self.cur_waveforms = self.cur_waveforms[:,channels,:]
+
+		# Performs wrap-around correction using trigger location
+		for i, waveform in enumerate(self.cur_waveforms):
+
+			trigger_loc = (((self.cur_times_320[i]+2+2)%8)*32-16)%256
+			deltax = np.array([256*4/259]+[256/259]*255)
+			deltax = np.roll(deltax, -trigger_loc)
+			x_data = np.cumsum(deltax)
+			self.sample_times.append(x_data*25./256)
+
+			# setting axis is necessary because waveform here is a 2D array
+			self.cur_waveforms[i,:,:] = np.roll(waveform.copy(), -trigger_loc, axis=1)
+			self.cur_waveforms_raw[i,:,:] = np.roll(self.cur_waveforms_raw[i,:,:].copy(), -trigger_loc, axis=1)
+
+		self.sample_times = np.array(self.sample_times)
 
 		return
 	
@@ -317,41 +337,30 @@ class Acdc:
 
 		# Creates 1D array of x_data (all 256 capacitors) and computes 2D array (one axis channel #, other axis capacitor #) of
 		#	corrected and raw ADC data
-		x_data = np.linspace(0,255,256)
 		y_data_list = self.cur_waveforms[event,channels,:].reshape(len(channels), -1)
 		y_data_raw_list = self.cur_waveforms_raw[event,channels,:].reshape(len(channels), -1)
 
-		time_domain = np.linspace(0, 0.0000255, 256)*1e6
 
-		# Plots the corrected ADC data
 		fig, (ax1, ax2) = plt.subplots(2, 1)
+
+		# Plots the raw waveform data
+		for channel, y_data_raw in enumerate(y_data_raw_list):
+			ax1.plot(self.sample_times[event], y_data_raw, label="Channel %i"%channel)
+
+		# Plots the corrected waveform data
 		for channel, y_data in enumerate(y_data_list):
-			ax1.plot(time_domain, y_data, label='Channel %i'%channel)
-
-			# y_data_1 = self.high_pass_filt(y_data, .5, 10)
-
-			# ax1.plot(time_domain*1e6, y_data_1, label='Channel %i'%channel)
-
-			# y_data_2 = self.low_pass_filt(y_data, .5 , 10)
-
-			# ax1.plot(time_domain*1e6, y_data_2, label='Channel %i'%channel)
-
-			# ax1.plot(time_domain*1e6, (y_data+y_data_2)*60)
-
-		# Plots the raw ADC data
-		for channel, y_data in enumerate(y_data_raw_list):
-			ax2.plot(time_domain, y_data, label="Channel %i"%channel)
+			ax2.plot(self.sample_times[event], y_data, label='Channel %i'%channel)		
 
 		# Labels the plots, make them look pretty, and displays the plots
 		ax1.set_xlabel("Time sample (ns)")
-		ax1.set_ylabel("ADC count (ped corrected)")
+		ax1.set_ylabel("ADC count (raw)")
 		ax1.tick_params(right=True, top=True)
 		ax2.set_xlabel("Time sample (ns)")
-		ax2.set_ylabel("ADC count (raw)")
+		ax2.set_ylabel("ADC count (ped corrected)")
 		ax2.tick_params(right=True, top=True)
+		
 		fig.tight_layout()
 		plt.show()
-
 		return
 
 
@@ -406,33 +415,50 @@ class Acdc:
 		centers = []
 
 		num_skipped_waveforms = 0
-		for waveform in waveforms:
+		for i, waveform in enumerate(waveforms):
+			
+			if not events is None:
+				i = events[i]
 
-			try:
-				
-				largest_ch = self.largest_signal_ch(waveform)
-				l_pos_y_data = waveform[largest_ch]
 
-				# self.plot_ped_corrected_pulse(event=events, channels=largest_ch)
+			cw_low = (((self.cur_times_320[i]+2+2)%8)*32-16)%256
 
-				# l_pos = self.find_l_pos_cfd(l_pos_y_data)
-				l_pos = self.find_l_pos_autocor(l_pos_y_data)
-				# l_pos = self.find_l_pos_autocor_centered(l_pos_y_data)
-				# l_pos = self.find_l_pos_spline(l_pos_y_data)
+		# try:
+			
+			print(i)
+			largest_ch = self.largest_signal_ch(waveform)
+			l_pos_y_data = waveform[largest_ch]
 
-				# t_pos = self.find_t_pos_simple(waveform)
-				t_pos = self.find_t_pos_ls_gauss(waveform)
+			self.plot_ped_corrected_pulse(i, channels=largest_ch)
 
-				centers.append((l_pos, t_pos))
 
-			except:
-				num_skipped_waveforms += 1
-				pass
+			# self.plot_ped_corrected_pulse(event=events, channels=largest_ch)
+
+			# l_pos = self.find_l_pos_cfd(l_pos_y_data)
+			l_pos = self.find_l_pos_autocor(l_pos_y_data, cw_low)
+			# l_pos = self.find_l_pos_autocor_centered(l_pos_y_data)
+			# l_pos = self.find_l_pos_spline(l_pos_y_data)
+			# l_pos = self.find_l_pos_langaus(l_pos_y_data)
+
+			# t_pos = self.find_t_pos_simple(waveform)
+			t_pos = self.find_t_pos_ls_gauss(waveform)
+
+			centers.append((l_pos, t_pos))
+
+		# except:
+		# 	num_skipped_waveforms += 1
+		# 	pass
+
+		exit()
+		
+		print(f'Number of skipped waveforms: {num_skipped_waveforms}')
+		print(f'Total number of wavefomrs: {len(waveforms)}')
+		print(f'Percent skipped: {round(100*num_skipped_waveforms/len(waveforms), 2)}%')
 						
-
+		# print(centers)
 		centers = np.array(centers)		
 
-		print(centers)
+		# print(centers)
 		selection = centers[:,0] > 16
 		centers[:,0][selection] = 25 - centers[:,0][selection]
 
@@ -601,15 +627,24 @@ class Acdc:
 		
 		return (25./256)*extrema
 
-	def find_l_pos_autocor(self, ydata, ver='LE_DELTA', display=True):
+	def find_l_pos_autocor(self, ydata, cw_low, ver='LE_DELTA', display=True):
 		"""xxx fill in description
 		
 		"""
 
-		ver = 'CENTERED'
-		display=False
+		ver = 'LE_DELTA' # can be FULL, CENTERED, LE_PEAK, LE_DELTA, or LE_SPEC_BOUND
+		display=True
 
 		domain = np.linspace(0,255,256, dtype=int)
+		# fig3, ax3 = plt.subplots()
+		# ax3.plot(domain, ydata)
+
+		# ydata = np.roll(ydata, cw_low)
+		# ax3.plot(domain, ydata)
+		# domain = np.roll(domain, cw_low)
+		# ax3.plot(domain, ydata)
+
+		# plt.show()
 
 		height_cutoff = -0.6*ydata.max()
 		distance_between_peaks = 20
@@ -637,13 +672,21 @@ class Acdc:
 				ax.set_ylabel('ADC Count')
 				ax.set_title('Integration bounds for the autocorrelation function')
 
-		elif 'LE' in ver:
-			# subtracting 12 since 12 is approximately 1.2 ns * (256/25.5). 1.2 ns is used as the rough maximum rise time 
-			#	a signal could have.
-			fit_lower_bound = prompt_peak - 14
+				plt.show()
 
-			# add a small amount to rightside of peak for the spline fit
-			fit_upper_bound = prompt_peak + 4
+		elif 'LE' in ver:
+			
+
+			if ver == 'LE_SPEC_BOUND':
+				fit_lower_bound = reflect_peak - 14
+				fit_upper_bound = reflect_peak + 4
+			else:
+				# subtracting 12 since 12 is approximately 1.2 ns * (256/25.5). 1.2 ns is used as the rough maximum rise time 
+				#	a signal could have.
+				fit_lower_bound = prompt_peak - 14
+
+				# add a small amount to rightside of peak for the spline fit
+				fit_upper_bound = prompt_peak + 4
 
 			ydata_subrange = ydata[fit_lower_bound:fit_upper_bound]
 			subdomain = domain[fit_lower_bound:fit_upper_bound]
@@ -656,24 +699,68 @@ class Acdc:
 
 			extrema = dcubic_spline.solve(0)
 
-			prompt_peak_max = cubic_spline(extrema[(extrema > (prompt_peak-3)) & (extrema < (prompt_peak+3))])
+			if ver == 'LE_SPEC_BOUND':
 
-			integral_lower_bound = cubic_spline.solve(0.1*prompt_peak_max, extrapolate=False)[0]
-			# integral_lower_bound = integral_lower_bound[]
-			integral_upper_bound = cubic_spline.solve(0.9*prompt_peak_max, extrapolate=False)[0]
+				old_cubic_spline = cubic_spline
+				
+				reflect_peak_max = cubic_spline(extrema[(extrema > (reflect_peak-3)) & (extrema < (reflect_peak+3))])
+				reflect_peak_min_val = cubic_spline(extrema[0]+3) # adding two just to not be right at the inflection point
 
-			if display:
-				fig, ax = plt.subplots()
-				ax.scatter(domain[fit_lower_bound-5:fit_upper_bound+5], ydata[domain[fit_lower_bound-5:fit_upper_bound+5]], marker='.')
-				ax.plot(np.linspace(fit_lower_bound, fit_upper_bound, 100), cubic_spline(np.linspace(fit_lower_bound, fit_upper_bound, 100)), color='orange')
-				# ax.axhline(0.1*prompt_peak_max, color='purple')
-				# ax.axhline(0.9*prompt_peak_max, color='purple')
-				ax.axvline(integral_lower_bound, color='red', label='Lower bound (10%)')
-				ax.axvline(integral_upper_bound, color='purple', label='Upper bound (90%)')
-				ax.legend()
-				ax.set_xlabel('Sample')
-				ax.set_ylabel('ADC Count')
-				ax.set_title('Integration bounds for the autocorrelation function')
+				# repeating the spline for the prompt peak now
+				fit_lower_bound = prompt_peak - 14
+				fit_upper_bound = prompt_peak + 4
+
+				ydata_subrange = ydata[fit_lower_bound:fit_upper_bound]
+				subdomain = domain[fit_lower_bound:fit_upper_bound]
+
+				spline_tuple = splrep(subdomain, ydata_subrange, k=3, s=10000)
+				bspline = BSpline(*spline_tuple)
+				dbspline = bspline.derivative()
+				cubic_spline = CubicSpline(subdomain, bspline(subdomain))
+				dcubic_spline = CubicSpline(subdomain, dbspline(subdomain))
+
+				extrema = dcubic_spline.solve(0)
+
+				prompt_peak_max = cubic_spline(extrema[(extrema > (prompt_peak-3)) & (extrema < (prompt_peak+3))])
+
+				integral_lower_bound = cubic_spline.solve(reflect_peak_min_val, extrapolate=False)[0]
+				integral_upper_bound = cubic_spline.solve(0.9*prompt_peak_max, extrapolate=False)[0]
+
+				reflect_peak_max = reflect_peak_max[0]
+				prompt_peak_max = prompt_peak_max[0]
+
+				if display:
+					fig3, ax3 = plt.subplots()
+					ax3.scatter(domain[prompt_peak-19:reflect_peak+9], ydata[domain[prompt_peak-19:reflect_peak+9]], marker='.')
+					ax3.plot(np.linspace(reflect_peak-14, reflect_peak+4, 100), old_cubic_spline(np.linspace(reflect_peak-14, reflect_peak+4, 100)), color='orange')
+					ax3.plot(np.linspace(prompt_peak-14, prompt_peak+4, 100), cubic_spline(np.linspace(prompt_peak-14, prompt_peak+4, 100)), color='green')
+					ax3.axhline(reflect_peak_min_val, color='pink', label=f'{round(100*reflect_peak_min_val/reflect_peak_max, 2)}% of reflected peak max')
+					ax3.axvline(integral_lower_bound, color='red', label=f'Lower bound ({round(100*reflect_peak_min_val/prompt_peak_max, 2)}% of \nprompt peak max)')
+					ax3.axvline(integral_upper_bound, color='purple', label='Upper bound (90% of \nprompt peak max)')
+					ax3.legend()
+					ax3.set_xlabel('Sample')
+					ax3.set_ylabel('ADC Count')
+					ax3.set_title('Integration bounds for the autocorrelation function')
+
+			else:
+				prompt_peak_max = cubic_spline(extrema[(extrema > (prompt_peak-3)) & (extrema < (prompt_peak+3))])
+
+				integral_lower_bound = cubic_spline.solve(0.1*prompt_peak_max, extrapolate=False)[0]
+				# integral_lower_bound = integral_lower_bound[]
+				integral_upper_bound = cubic_spline.solve(0.9*prompt_peak_max, extrapolate=False)[0]
+
+				if display:
+					fig, ax = plt.subplots()
+					ax.scatter(domain[fit_lower_bound-5:reflect_peak+9], ydata[domain[fit_lower_bound-5:reflect_peak+9]], marker='.')
+					ax.plot(np.linspace(fit_lower_bound, fit_upper_bound, 100), cubic_spline(np.linspace(fit_lower_bound, fit_upper_bound, 100)), color='orange')
+					# ax.axhline(0.1*prompt_peak_max, color='purple')
+					# ax.axhline(0.9*prompt_peak_max, color='purple')
+					ax.axvline(integral_lower_bound, color='red', label='Lower bound (10%)')
+					ax.axvline(integral_upper_bound, color='purple', label='Upper bound (90%)')
+					ax.legend()
+					ax.set_xlabel('Sample')
+					ax.set_ylabel('ADC Count')
+					ax.set_title('Integration bounds for the autocorrelation function')
 
 		integrals = []
 		lags = []
@@ -759,17 +846,127 @@ class Acdc:
 			ax2.legend()
 			ax2.set_xlabel('Time delay (ns)')
 			ax2.set_ylabel('Integral value')
-			if ver == 'LE_DELTA':
-				ax2.text(16.5, 6.33e6, f'$\Delta t=${round((25./256)*(extremas[1]-extremas[0]), 3)} ns', fontdict={'size': 16})
+			if ver == 'LE_DELTA' or ver == 'LE_SPEC_BOUND':
+				ax2.text(16.5, 3.33e6, f'$\Delta t=${round((25./256)*(extremas[1]-extremas[0]), 3)} ns', fontdict={'size': 16})
 
 			plt.show()
 		
-		if ver == 'LE_DELTA':
+		if ver == 'LE_DELTA' or ver == 'LE_SPEC_BOUND':
 			delta_t = (25./256)*(extremas[1] - extremas[0])
 		else:
 			delta_t = (25./256)*extrema
 		return delta_t
-		
+
+	def find_l_pos_langaus(self, ydata):
+
+		display=False
+
+		def fitfun(x, *p):
+			A, mu, sigma, xi = p
+			#return A*np.exp(-(x-mu)**2/(2.*sigma**2))
+			#return A*landau.pdf(x=x,x_mpv=mu,xi=sigma)
+			#return A*langauss.pdf(x=x,landau_x_mpv=mu,landau_xi=xi,gauss_sigma=sigma)
+			return A*pylandau.langau_pdf(x, mu, xi, sigma)
+
+		def double_fitfun(x, *p):
+			A1, mu1, sigma1, xi1, A2, mu2, sigma2, y0 = p
+			#return A*np.exp(-(x-mu)**2/(2.*sigma**2))
+			#return A*landau.pdf(x=x,x_mpv=mu,xi=sigma)
+			#return A*langauss.pdf(x=x,landau_x_mpv=mu,landau_xi=xi,gauss_sigma=sigma)
+			return fitfun(x, A1, mu1, sigma1, xi1) + fitfun(x, A2, mu2, sigma2, xi1) + y0
+
+
+		xdata = np.linspace(0,255,256)
+
+		peaks2 = scipy.signal.find_peaks(-ydata, height=(-0.6)*ydata.min(), distance = 22)[0]
+		peaks2 = xdata[peaks2]
+
+		peaks = []
+		csl = []
+		coefs = []
+		# print("rough peaks", peaks2)
+
+		xp1Cut = (xdata > (peaks2[0]-30)) & (xdata < (peaks2[1]+25))
+		xdata_cut = xdata[xp1Cut]
+		ydata_cut = ydata[xp1Cut]
+		param_bounds=([-1000000,0, 0.1, 0.1, -1000000, 0, 0.1, -100],[-10, 256, 10, 10, -10, 256, 10, 100])
+		p0 = [-1000., 1.0*peaks2[0], 5., 5., -1000., 1.0*peaks2[1], 5., 0.]
+		coeff2, var_matrix2 = curve_fit(double_fitfun, xdata_cut, ydata_cut, p0=p0, bounds=param_bounds)
+		#coeff2 = coefs
+		# print("coefficients", coeff2)
+
+		peaks = np.array((coeff2[5],coeff2[1]))
+
+		try:
+			# print(peaks.max()-peaks.min())
+			# print(peaks2.max()-peaks2.min())
+			pass
+		except:
+			pass
+
+		# print(peaks2)
+		# #print(peaks)
+		# print((coeff2[1], coeff2[5]))
+		# print(coeff2[5] - coeff2[1])
+
+		peaks3 = []
+
+		funmin1 = fitfun(fmin(lambda x: fitfun(x, *coeff2[:4]), coeff2[1], disp=False), *coeff2[:4])
+		#print("Fmin:", funmin1)
+		lamfun1 = lambda x: fitfun(x, *coeff2[:4]) - funmin1*0.1
+		peaks3.append(fsolve(lamfun1, [coeff2[1]-10]).min())
+
+		funmin2 = fitfun(fmin(lambda x: fitfun(x, *(coeff2[4], coeff2[5], coeff2[6], coeff2[3])), coeff2[5], disp=False), 
+											*(coeff2[4], coeff2[5], coeff2[6], coeff2[3]))
+		#print("Fmin:", funmin2)
+		lamfun2 = lambda x: fitfun(x, *(coeff2[4], coeff2[5], coeff2[6], coeff2[3])) - funmin2*0.1
+		peaks3.append(fsolve(lamfun2, [coeff2[5]-10]).min())
+
+		peaks3 = np.array(peaks3)
+
+		if display:
+			print(peaks3)
+			print("Rough:",  peaks2.max()-peaks2.min())
+			print("MPV:",  (25./256)*(peaks.max()-peaks.min()))
+			print("CFD:",  peaks3.max()-peaks3.min())
+
+		if display:
+
+			fig, (ax1) = plt.subplots(1, 1)
+			ax1.plot(xdata, ydata, label="Pulse")
+			for i, (x, bs) in enumerate(csl):
+				ax1.plot(x, bs, label="SingleFit_%i"%(i+1), color='orange')
+			ax1.plot(xdata_cut, fitfun(xdata_cut,*coeff2[:4]), label="doublefit_1", color='pink')
+			ax1.plot(xdata_cut, fitfun(xdata_cut,*(coeff2[4], coeff2[5], coeff2[6], coeff2[3])), label="doublefit_2", color='darksalmon')
+			ax1.plot(xdata_cut, double_fitfun(xdata_cut,*coeff2), label="doublefit", color='magenta')
+			#ax1.plot(xdata_cut, lamfun1(xdata_cut), label="doublefit", color='black')
+			#ax1.plot(xdata_cut, lamfun2(xdata_cut), label="doublefit", color='black')
+			#ax1.plot(xplot, dbs(xplot))
+			#ax1.plot(xplot, dcs(xplot))
+			#for x in peaks:
+			#    ax1.axvline(x, color="green")
+
+			#for x in peaks2:
+			#    ax1.axvline(x, color="red")
+			ax1.axvline(coeff2[1], color="blue")
+			ax1.axvline(coeff2[5], color="blue")
+			for x in peaks3:
+				ax1.axvline(x, color="black")
+
+			ax1.set_xlabel("Sample")
+			ax1.set_ylabel("ADC value (ped corrected)")
+
+			#ax1.axvline(cw_low, color="green")
+			ax1.axvline(40, color="green")
+
+			ax1.legend()
+
+			ax1.text(90,-1144, f'$\Delta t =$ {round((25./256)*(peaks.max()-peaks.min()), 2)}', fontdict={'size': 14})
+
+			fig.tight_layout()
+
+		return (25./256)*(peaks.max()-peaks.min())
+
 	def find_t_pos_simple(self, waveform):
 		return self.largest_signal_ch(waveform)
 
@@ -791,7 +988,7 @@ class Acdc:
 		mu_guess = 0.5*(xdata[-1]+xdata[0])
 		A_guess = min(ydata)
 		p0 = [N_guess, sigma_guess, mu_guess, A_guess]
-		popt, pcov = scipy.optimize.curve_fit(gauss_const_back, xdata, ydata, p0=p0)
+		popt, pcov = curve_fit(gauss_const_back, xdata, ydata, p0=p0)
 
 		if display:
 
@@ -811,17 +1008,21 @@ class Acdc:
 		mm_per_ns = 72
 		offset_in_ns = 3.5
 		mm_per_strip = 6.6
-		print(type(centers))
 
 		fig, ax = plt.subplots()
 		fig.set_size_inches([10.5,8])
-		#ax1.hist(centers[:,1], bins=np.linspace(0, 30, 31))
-		xbins = (np.linspace(3.5, 6.5, 26)-offset_in_ns)*mm_per_ns
-		ybins = np.linspace(0, 30, 31)*mm_per_strip
-		h = ax.hist2d((centers[:,0]-offset_in_ns)*mm_per_ns,centers[:,1]*mm_per_strip, bins=(xbins, ybins))#, norm=matplotlib.colors.LogNorm())
+
+		xbins, ybins = np.linspace(0,200,201), np.linspace(0,200,201)
+		h, xedges, yedges, image_mesh = ax.hist2d((centers[:,0]-offset_in_ns)*mm_per_ns,centers[:,1]*mm_per_strip, bins=(xbins, ybins))#, norm=matplotlib.colors.LogNorm())
 		ax.set_xlabel("dt(pulse, reflection)*v [mm]")
 		ax.set_ylabel("Y position (perpendicular to strips) [mm]")
-		fig.colorbar(h[3], ax=ax)
+		fig.colorbar(image_mesh, ax=ax)
+
+		fig2, ax2 = plt.subplots()
+		y_data = h[np.max(h, axis=1).argmax()]
+		x_data = xedges[:-1]
+		ax2.plot(x_data, y_data)
+
 		plt.show()
 
 		return
@@ -948,14 +1149,16 @@ if __name__=='__main__':
 		'wraparound': None,
 		'vel': 0.18,			 # mm/ps, average (~500 MHz - 1GHz) propagation velocity of the strip 
 		'dt': 1.0/(40e6*256),	 # picoseconds, nominal sampling time interval, 1/(clock to PSEC4 x number of samples)
-		'pedestal_data_path': r'/home/cameronpoe/Desktop/lappd_tof_container/testData/Raw_testData_20230615_164912_b0.txt',
+		# 'pedestal_data_path': r'/home/cameronpoe/Desktop/lappd_tof_container/testData/old_data/Raw_testData_20230615_164912_b0.txt',
+		'pedestal_data_path': r'/home/cameronpoe/Desktop/lappd_tof_container/testData/ped_Raw_testData_ACC1_20230714_093238_b0.txt',
 		'pedestal_counts': None,
 		'pedestal_voltage': None,
 		'voltage_count_curves': None,
 		'calib_data_file_path': r'/home/cameronpoe/Desktop/lappd_tof_container/testData/test.root'
 	}
 
-	data_path = r'/home/cameronpoe/Desktop/lappd_tof_container/testData/Raw_testData_20230615_170611_b0.txt'
+	# data_path = r'/home/cameronpoe/Desktop/lappd_tof_container/testData/old_data/Raw_testData_20230615_170611_b0.txt'
+	data_path = r'/home/cameronpoe/Desktop/lappd_tof_container/testData/Raw_testData_ACC1_20230714_094508_b0.txt'
 
 	test_acdc = Acdc(init_dict)
 
@@ -969,7 +1172,7 @@ if __name__=='__main__':
 
 	# time_domain = np.linspace(0, 0.0000255, 256)
 
-	centers = test_acdc.find_event_centers()
+	centers = test_acdc.find_event_centers(events=400)
 	test_acdc.plot_centers(centers)
 	
 	exit()

@@ -6,6 +6,8 @@ from matplotlib import colors
 import scipy
 from scipy.optimize import curve_fit, fsolve, fmin
 from scipy.interpolate import splrep, BSpline, CubicSpline
+from scipy.signal import find_peaks
+from scipy.integrate import trapezoid
 import uproot
 import pylandau
 
@@ -209,12 +211,15 @@ class Acdc:
 		
 		# Have to rearrange channels
 		channels = np.array([5,4,3,2,1,0,11,10,9,8,7,6,17,16,15,14,13,12,23,22,21,20,19,18,29,28,27,26,25,24])
-		self.cur_waveforms = self.cur_waveforms[:,channels,:]
+		self.cur_waveforms = self.cur_waveforms[:,channels,:].copy()
+		self.cur_waveforms_raw = self.cur_waveforms_raw[:,channels,:].copy()
 
 		# Performs wrap-around correction using trigger location
 		for i, waveform in enumerate(self.cur_waveforms):
 
 			trigger_loc = (((self.cur_times_320[i]+2+2)%8)*32-16)%256
+			# cw_high = (((self.cur_times_320[i]+2+1)%8)*32+24)%256
+
 			deltax = np.array([256*4/259]+[256/259]*255)
 			deltax = np.roll(deltax, -trigger_loc)
 			x_data = np.cumsum(deltax)
@@ -288,6 +293,30 @@ class Acdc:
 
 		return
 
+	def index_to_time(self, index, times):
+		"""Implements quick index-to-time using linear interpolation (add more xxx)"""
+
+		def index_to_time_rec(single_index):
+			lower_index = int(single_index)
+			upper_index = lower_index+1
+
+			if upper_index == len(times):
+				return times[-1]
+			else:
+				slope_denominator = (259./25)*(times[upper_index] - times[lower_index])
+				slope = (times[upper_index] - times[lower_index])/round(slope_denominator)
+				return times[lower_index] + slope*single_index
+
+		if not isinstance(index, list) and not isinstance(index, np.ndarray):
+			return index_to_time_rec(index)
+		else:
+			new_array = []
+			for element in index:
+				new_array.append(index_to_time_rec(element))
+			new_array = np.array(new_array)
+			return new_array		
+			
+	# not sure how this one is affected by incorporating sample_times and wrap-around fix xxx 
 	def hist_single_cap_counts_vs_ped(self, ch, cap):
 		"""Plots a histogram of ADC counts for a single capacitor in a channel for all events recorded in the binary file. Also plots a histogram for the pedestal ADC counts of the same capacitor.
 		Arguments:
@@ -363,27 +392,6 @@ class Acdc:
 		plt.show()
 		return
 
-
-		# Plots the corrected ADC data
-		fig, (ax1, ax2) = plt.subplots(2, 1)
-		for channel, y_data in enumerate(y_data_list):
-			ax1.plot(x_data, y_data, label='Channel %i'%channel)
-		ax1.set_xlabel("Time sample")
-		ax1.set_ylabel("ADC count (ped corrected)")
-		ax1.tick_params(right=True, top=True)
-
-		# Plots the raw ADC data
-		for channel, y_data in enumerate(y_data_raw_list):
-			ax2.plot(x_data, y_data, label="Channel %i"%channel)
-		ax2.set_xlabel("Time sample")
-		ax2.set_ylabel("ADC count (raw)")
-		ax2.tick_params(right=True, top=True)
-
-		fig.tight_layout()
-		plt.show()
-
-		return
-
 	def plot_raw_lappd(self, event):
 
 		waveform = self.cur_waveforms[event]
@@ -407,35 +415,31 @@ class Acdc:
 
 		# If no `events` list is passed, assume we must find centers for all events in cur_waveforms. 
 		if events is None:
-			waveforms = self.cur_waveforms
+			events = np.linspace(0, len(self.sample_times)-1, len(self.sample_times), dtype=int)
 		else:
 			events = convert_to_list(events)
-			waveforms = self.cur_waveforms[events,:,:]
 
 		centers = []
 
 		num_skipped_waveforms = 0
-		for i, waveform in enumerate(waveforms):
-			
-			if not events is None:
-				i = events[i]
-
-
-			cw_low = (((self.cur_times_320[i]+2+2)%8)*32-16)%256
-
+		for i in events:	
 		# try:
+
+			waveform = self.cur_waveforms[i]	
+
+			np.save('event450_times', self.sample_times[i])
+			np.save('event450_raw', self.cur_waveforms_raw[i,:,:])
+			np.save('event450_corr', self.cur_waveforms[i,:,:])
 			
-			print(i)
+			l_pos_x_data = self.sample_times[i]
 			largest_ch = self.largest_signal_ch(waveform)
 			l_pos_y_data = waveform[largest_ch]
-
+			
 			self.plot_ped_corrected_pulse(i, channels=largest_ch)
 
-
-			# self.plot_ped_corrected_pulse(event=events, channels=largest_ch)
-
+			DISPLAY_CENTER_FITS = True
 			# l_pos = self.find_l_pos_cfd(l_pos_y_data)
-			l_pos = self.find_l_pos_autocor(l_pos_y_data, cw_low)
+			l_pos = self.find_l_pos_autocor_le_subset(l_pos_x_data, l_pos_y_data, display=DISPLAY_CENTER_FITS)
 			# l_pos = self.find_l_pos_autocor_centered(l_pos_y_data)
 			# l_pos = self.find_l_pos_spline(l_pos_y_data)
 			# l_pos = self.find_l_pos_langaus(l_pos_y_data)
@@ -548,7 +552,181 @@ class Acdc:
 		l_pos = peaks_precise.max()-peaks_precise.min()
 		
 		return l_pos
+
+	def find_l_pos_autocor_le_subset(self, xdata, ydata, display=False):
+		"""xxx fill in description
+		
+		"""
+
+		# Determines the indices of the peaks in the prompt and reflected pulses
+		height_cutoff = -0.6*ydata.max()
+		distance_between_peaks = 20		# in units of indices
+		peak_region_radius = 15			# in units of indices
+		peaks_rough = find_peaks(-1*ydata, height=height_cutoff, distance=distance_between_peaks)[0]
+		prompt_peak_index, reflect_peak_index = np.sort(peaks_rough[ydata[peaks_rough].argsort()[0:2]])
 	
+		# Creates subregions of data around the reflect peak
+		fit_lower_bound = reflect_peak_index - 14
+		fit_upper_bound = reflect_peak_index + 4
+		ydata_subrange = ydata[fit_lower_bound:fit_upper_bound]
+		subdomain = xdata[fit_lower_bound:fit_upper_bound]
+		peak_region_lower, peak_region_upper = xdata[reflect_peak_index-3], xdata[reflect_peak_index+3]
+
+		# Solves for the extrema of the reflect peak
+		spline_tuple = splrep(subdomain, ydata_subrange, k=3, s=10000)
+		bspline = BSpline(*spline_tuple)
+		dbspline = bspline.derivative()
+		cubic_spline = CubicSpline(subdomain, bspline(subdomain))
+		dcubic_spline = CubicSpline(subdomain, dbspline(subdomain))
+		extrema = dcubic_spline.solve(0)
+		reflect_peak_max = cubic_spline(extrema[(extrema > peak_region_lower) & (extrema < peak_region_upper)])	# finds the extrema that is near our original find_peaks value
+		reflect_peak_max = reflect_peak_max[0]
+		reflect_peak_min_val = cubic_spline(extrema[0]+3*25./256) # adding a few on the right just to not be right at the inflection point
+
+		# repeating the spline for the prompt peak now
+		old_cubic_spline = cubic_spline
+		fit_lower_bound = prompt_peak_index - 14
+		fit_upper_bound = prompt_peak_index + 4
+		ydata_subrange = ydata[fit_lower_bound:fit_upper_bound]
+		subdomain = xdata[fit_lower_bound:fit_upper_bound]
+		spline_tuple = splrep(subdomain, ydata_subrange, k=3, s=10000)
+		bspline = BSpline(*spline_tuple)
+		dbspline = bspline.derivative()
+		cubic_spline = CubicSpline(subdomain, bspline(subdomain))
+		dcubic_spline = CubicSpline(subdomain, dbspline(subdomain))
+		extrema = dcubic_spline.solve(0)
+		peak_region_lower, peak_region_upper = xdata[prompt_peak_index-3], xdata[prompt_peak_index+3]
+		prompt_peak_max = cubic_spline(extrema[(extrema > peak_region_lower) & (extrema < peak_region_upper)])
+		prompt_peak_max = prompt_peak_max[0]
+
+		# Computes the integral bounds
+		integral_lower_bound = cubic_spline.solve(reflect_peak_min_val, extrapolate=False)[0]
+		integral_upper_bound = cubic_spline.solve(0.9*prompt_peak_max, extrapolate=False)[0]
+		integral_lower_bound_index, integral_upper_bound_index = None, None
+		for i, time in enumerate(xdata):
+			if integral_lower_bound_index is None and integral_lower_bound < i:
+				integral_lower_bound_index = i
+			if integral_upper_bound_index is None and integral_upper_bound < i:
+				integral_upper_bound_index = i
+
+		if display:
+			fig3, ax3 = plt.subplots()
+			ax3.scatter(xdata, ydata, marker='.', label='Raw data')
+
+			reflect_peak_spline_domain = np.linspace(xdata[reflect_peak_index-14], xdata[reflect_peak_index+4-1], 100)
+			ax3.plot(reflect_peak_spline_domain, old_cubic_spline(reflect_peak_spline_domain), color='orange')
+
+			prompt_peak_spline_domain = np.linspace(xdata[prompt_peak_index-14], xdata[prompt_peak_index+4-1], 100)
+			ax3.plot(prompt_peak_spline_domain, cubic_spline(prompt_peak_spline_domain), color='green')
+
+			ax3.axhline(reflect_peak_min_val, color='pink', label=f'{round(100*reflect_peak_min_val/reflect_peak_max, 2)}% of reflected peak max')
+			ax3.axvline(integral_lower_bound, color='red', label=f'Lower bound ({round(100*reflect_peak_min_val/prompt_peak_max, 2)}% of \nprompt peak max)')
+			ax3.axvline(integral_upper_bound, color='purple', label='Upper bound (90% of \nprompt peak max)')
+			ax3.legend()
+			ax3.set_xlabel('Sample')
+			ax3.set_ylabel('ADC Count')
+			ax3.set_title('Integration bounds for the autocorrelation function')
+
+		integrals = []
+		lags = []
+
+		lag = 0
+		lag_increment = 1
+		while lag < 256:
+
+			ydata_shifted = np.copy(ydata)	# make sure not to change ydata
+
+			if lag != 0:
+				ydata_shifted[:lag] = 0
+				lags.append(xdata[lag-lag_increment])
+			else:
+				lags.append(0)
+
+
+			ydata_shifted = np.roll(ydata_shifted, -1*lag)
+			auto_cor_func = ydata*ydata_shifted
+
+			subdomain = np.linspace(int(integral_lower_bound_index), int(integral_upper_bound_index), int(integral_upper_bound_index)-int(integral_lower_bound_index)+1, dtype=int)
+
+			integrals.append(trapezoid(auto_cor_func[subdomain], xdata[subdomain]))
+
+			lag += lag_increment
+
+		integrals = np.array(integrals)
+		lags = np.array(lags)
+			
+		integral_peaks_rough = lags[find_peaks(integrals, height=0.6*(integrals.max()), distance=5/lag_increment)[0]]
+		
+		# I LEFT OFF RIGHT HERE, HAVEN'T CHECKED PRIOR CODE IF IT WORKS. I AM MAKING SURE THAT EVERYTHING IS IN TIME DOMAIN WHERE IT CAN BE. NEXT UP IS TO ACTUALLY FIT THE AUTOCORRELATION FUNCTION. I THINK THE AUTOCORRELATION FUNCTION DESCRIBED BY TUPLE (lags, integrals) IS GOOD TO USE RIGHT NOW, AND I THINK IT PROPERLY INCORPORATES THE WRAPAROUND (BUT SHOULD CHECK)
+
+		# coming back to this, there's actually a huge issue with how the autocorrelation function is calculated. Since I'm rolling it by a constant number in index space, not all roll increments are equal in the time domain. Therefore, in the non-delayed signal, points p1 and p2 have a spacing of 100 ps, but in the delayed signal, points p3' and p4' have a spacing of 400 ps, but when we calculate a point on the autocorrelation function that correspond to the integral of the signal when p1 and p3' and p2 and p4' overlap, we are overlapping points that do not overlap in the time domain. This could alter the look of the autocorrelation function.
+
+		exit()
+
+		extremas = []
+		splines = []
+		domains = []
+		for integral_peak_rough in integral_peaks_rough:
+
+			integral_peak_region_cut = (lags > (integral_peak_rough-peak_region_radius)) & (lags < (integral_peak_rough+peak_region_radius))
+
+			spline_tuple = splrep(lags[integral_peak_region_cut], integrals[integral_peak_region_cut], k=3, s=10000)
+			data_bspline = BSpline(*spline_tuple)
+			ddata_bspline = data_bspline.derivative()
+			
+			peak_region_domain_lower = integral_peak_rough-peak_region_radius
+			if peak_region_domain_lower < 0:
+				peak_region_domain_lower = 0
+
+
+			peak_region_domain = np.linspace(peak_region_domain_lower, integral_peak_rough+peak_region_radius, 100)
+			dcubic_spline = CubicSpline(peak_region_domain, ddata_bspline(peak_region_domain))
+
+			extrema = dcubic_spline.solve(0)
+
+			extrema = extrema[(extrema > (integral_peak_rough-peak_region_radius+3)) & (extrema < (integral_peak_rough+peak_region_radius-3))]
+
+			if len(extrema) > 0:
+				extrema = extrema[data_bspline(extrema).argsort()][-1]
+			else:
+				extrema = integral_peak_rough
+			
+			extremas.append(extrema)
+			splines.append(data_bspline)
+			domains.append(peak_region_domain)
+
+		extremas = np.array(extremas)
+
+		if display:
+			fig2, ax2 = plt.subplots()
+			# ax2.plot(lags, integrals)
+			ax2.scatter(lags*25./256, integrals, label='Raw Data')
+			if ver != 'FULL':
+				for i, extrema in enumerate(extremas):
+					if i == 0:
+						color1 = 'orange'
+						color2 = 'red'
+					elif i == 1:
+						color1 = '#66ff00'
+						color2 = 'pink'
+
+					ax2.plot(domains[i]*25./256, splines[i](domains[i]), label='Spline Fit', color=color1)
+					ax2.axvline(extrema*25./256, label=f'Extrema: {round(extrema*25./256, 3)} ns', color=color2)
+			ax2.legend()
+			ax2.set_xlabel('Time delay (ns)')
+			ax2.set_ylabel('Integral value')
+			if ver == 'LE_DELTA' or ver == 'LE_SPEC_BOUND':
+				ax2.text(16.5, 3.33e6, f'$\Delta t=${round((25./256)*(extremas[1]-extremas[0]), 3)} ns', fontdict={'size': 16})
+
+			plt.show()
+		
+		if ver == 'LE_DELTA' or ver == 'LE_SPEC_BOUND':
+			delta_t = (25./256)*(extremas[1] - extremas[0])
+		else:
+			delta_t = (25./256)*extrema
+
+		return delta_t
+
 	def find_l_pos_autocor_centered(self, ydata):
 		"""xxx fill in description
 		
@@ -627,7 +805,7 @@ class Acdc:
 		
 		return (25./256)*extrema
 
-	def find_l_pos_autocor(self, ydata, cw_low, ver='LE_DELTA', display=True):
+	def find_l_pos_autocor(self, ydata, ver='LE_DELTA', display=True):
 		"""xxx fill in description
 		
 		"""
@@ -1172,7 +1350,7 @@ if __name__=='__main__':
 
 	# time_domain = np.linspace(0, 0.0000255, 256)
 
-	centers = test_acdc.find_event_centers(events=400)
+	centers = test_acdc.find_event_centers(events=450)
 	test_acdc.plot_centers(centers)
 	
 	exit()

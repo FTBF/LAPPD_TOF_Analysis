@@ -11,6 +11,7 @@ from scipy.integrate import trapezoid
 import uproot
 import pylandau
 
+avg_fwhms = []
 
 # Some quick helper functions
 
@@ -434,21 +435,26 @@ class Acdc:
 				largest_ch = self.largest_signal_ch(waveform)
 				l_pos_y_data = waveform[largest_ch]
 				
-				# self.plot_ped_corrected_pulse(i, channels=largest_ch)
 
-				DISPLAY_CENTER_FITS = False
+				DISPLAY_CENTER_FITS = True
+				DIAGNOSTIC_DATA = True
+				if DISPLAY_CENTER_FITS:
+					self.plot_ped_corrected_pulse(i, channels=largest_ch)
+				l_pos = self.find_l_pos_autocor_le_subset(l_pos_x_data, l_pos_y_data, display=DISPLAY_CENTER_FITS, diagnostic=DIAGNOSTIC_DATA)
 				# l_pos = self.find_l_pos_cfd(l_pos_y_data)
-				l_pos = self.find_l_pos_autocor_le_subset(l_pos_x_data, l_pos_y_data, display=DISPLAY_CENTER_FITS)
 				# l_pos = self.find_l_pos_autocor_centered(l_pos_y_data)
 				# l_pos = self.find_l_pos_spline(l_pos_y_data)
 				# l_pos = self.find_l_pos_langaus(l_pos_y_data)
+				# l_pos = 1.2
 
+				t_pos = self.find_t_pos_ls_gauss(waveform, display=DISPLAY_CENTER_FITS)
 				# t_pos = self.find_t_pos_simple(waveform)
-				t_pos = self.find_t_pos_ls_gauss(waveform)
+				# t_pos = 1.2
 
 				centers.append((l_pos, t_pos))
 
 			except:
+				print(f'Error with event {i}')
 				num_skipped_waveforms += 1
 				pass
 
@@ -551,10 +557,13 @@ class Acdc:
 		
 		return l_pos
 
-	def find_l_pos_autocor_le_subset(self, xdata, ydata, display=False):
+	def find_l_pos_autocor_le_subset(self, xdata, ydata, display=False, diagnostic=False):
 		"""xxx fill in description
 		
 		"""
+
+		# Possible values are 'gauss', 'langau'
+		diagnostic_method = 'gauss'
 
 		# Determines the indices of the peaks in the prompt and reflected pulses
 		height_cutoff = -0.6*ydata.max()
@@ -675,6 +684,17 @@ class Acdc:
 		height_cutoff = 0.6*integrals.max()
 		distance_between_peaks = 5				# in units of indices
 		peak_region_radius = 5*(25/256)			# in units of ns
+
+		if diagnostic:
+			large_region_radius = 15*(25/256)		# in units of ns
+			if diagnostic_method == 'gauss':
+				def diag_func(x, N, sigma, mu):
+						return (N/(sigma*np.sqrt(2*np.pi)))*np.exp(-0.5*(x-mu)*(x-mu)/(sigma*sigma))
+			elif diagnostic_method == 'langau':
+				def diag_func(x, A, mu, xi, sigma):
+					return A*pylandau.langau_pdf(x, mu, xi, sigma)
+			diag_funcs = []
+
 		integral_peaks_rough_indices = find_peaks(integrals, height=height_cutoff, distance=distance_between_peaks)[0]
 		integral_peaks_rough_times = lags[integral_peaks_rough_indices]
 
@@ -685,14 +705,16 @@ class Acdc:
 
 			integral_peak_region_cut = (lags > (integral_peak_rough-peak_region_radius)) & (lags < (integral_peak_rough+peak_region_radius))
 
-			spline_tuple = splrep(lags[integral_peak_region_cut], integrals[integral_peak_region_cut], k=3, s=10000)
+			lags_cut = lags[integral_peak_region_cut]
+			integrals_cut = integrals[integral_peak_region_cut]
+
+			spline_tuple = splrep(lags_cut, integrals_cut, k=3, s=10000)
 			data_bspline = BSpline(*spline_tuple)
 			ddata_bspline = data_bspline.derivative()
 			
 			peak_region_domain_lower = integral_peak_rough-peak_region_radius
 			if peak_region_domain_lower < 0:
 				peak_region_domain_lower = 0
-
 
 			peak_region_domain = np.linspace(peak_region_domain_lower, integral_peak_rough+peak_region_radius, 100)
 			dcubic_spline = CubicSpline(peak_region_domain, ddata_bspline(peak_region_domain))
@@ -704,12 +726,41 @@ class Acdc:
 			if len(extrema) > 0:
 				extrema = extrema[data_bspline(extrema).argsort()][-1]
 			else:
-				print('hello!')
 				extrema = integral_peak_rough
 			
 			extremas.append(extrema)
 			splines.append(data_bspline)
 			domains.append(peak_region_domain)
+
+			if diagnostic:
+				integral_peak_region_cut_diag = (lags > (integral_peak_rough-large_region_radius)) & (lags < (integral_peak_rough+large_region_radius))
+
+				integrals_cut_diag = integrals[integral_peak_region_cut_diag]
+				lags_cut_diag = lags[integral_peak_region_cut_diag]
+
+				if diagnostic_method == 'gauss':
+					N0 = 0.75*integrals_cut_diag.max()
+					sigma0 = 0.3*(lags_cut_diag[-1] - lags_cut_diag[0])
+					mu0 = lags_cut_diag[integrals_cut_diag.argmax()]
+					p0 = [N0, sigma0, mu0]
+				elif diagnostic_method == 'langau':
+					A0 = 0.2*integrals_cut_diag.max()
+					mu0 = lags_cut_diag[integrals_cut_diag.argmax()]
+					xi0 = 0.1*(lags_cut_diag[-1] - lags_cut_diag[0])
+					sigma0 = 0.1*(lags_cut_diag[-1] - lags_cut_diag[0])
+					p0 = [A0, mu0, xi0, sigma0]
+
+				popt, pcov = curve_fit(diag_func, lags_cut_diag, integrals_cut_diag, p0=p0)
+				diag_funcs.append(popt)
+				if display:
+					fig, ax = plt.subplots()
+					ax.scatter(lags_cut_diag, integrals_cut_diag, marker='.', label='Raw data')
+					diag_fit_domain = np.linspace(lags_cut_diag[0], lags_cut_diag[-1], 200)
+					ax.plot(diag_fit_domain, diag_func(diag_fit_domain, *p0), label='p0')
+					ax.plot(diag_fit_domain, diag_func(diag_fit_domain, *popt), label='popt')
+					ax.set_xlabel('Lag time (ns)')
+					ax.legend()
+					plt.show()		
 
 		extremas = np.array(extremas)
 
@@ -722,12 +773,46 @@ class Acdc:
 			ax2.axvline(extremas[1], color='green', label=f'Peak 2 (lag={round(extremas[1], 2)} ns)')
 			ax2.plot(domains[0], splines[0](domains[0]), color='pink', label='Peak 1 Spline')
 			ax2.plot(domains[1], splines[1](domains[1]), color='red', label='Peak 2 Spline')
-			ax2.text(15,5e5, f'$\Delta t = {round(delta_t, 2)}$ ns', fontdict={'size': 16})
+			ax2.text(12.8,3.17e5, f'$\Delta t = {round(delta_t, 2)}$ ns', fontdict={'size': 16})
 			ax2.legend()
 			ax2.set_xlabel('Time delay (ns)')
 			ax2.set_ylabel('Autocorrelation value')
 			plt.show()
-
+		
+		if diagnostic:
+			individual_fwhms = []
+			if diagnostic_method == 'gauss':
+				fwhm1 = 2.355*diag_funcs[0][1]
+				fwhm2 = 2.355*diag_funcs[1][1]
+				avg_fwhm = 0.5*(fwhm1 + fwhm2)
+				fwhm_start1 = diag_funcs[0][2] - 0.5*fwhm1
+				fwhm_start2 = diag_funcs[1][2] - 0.5*fwhm2
+				individual_fwhms.append((fwhm1, fwhm_start1))
+				individual_fwhms.append((fwhm2, fwhm_start2))
+			elif diagnostic_method == 'langau':
+				fwhms = []
+				whole_domain = np.linspace(lags[0], lags[-1], 5000)
+				for popt in diag_funcs:
+					y_vals = diag_func(whole_domain, *popt)
+					above_hm_lags = whole_domain[y_vals > 0.5*y_vals.max()]
+					fwhm = above_hm_lags[-1] - above_hm_lags[0]
+					fwhms.append(fwhm)
+				avg_fwhm = 0.5*(fwhms[0] + fwhms[1])
+			avg_fwhms.append(avg_fwhm)
+			if display:
+				fig, ax = plt.subplots()
+				fig.set_size_inches([10.5, 8])
+				ax.scatter(lags, integrals, label='Discrete Autocorrelation', marker='.')
+				whole_domain = np.linspace(-5, lags[-1], 6000)
+				diag_func1_yvals = diag_func(whole_domain, *diag_funcs[0])
+				ax.plot(whole_domain, diag_func1_yvals, color='pink', label='Peak 1 Fit')
+				diag_func2_yvals = diag_func(whole_domain, *diag_funcs[1])
+				ax.plot(whole_domain, diag_func2_yvals, color='red', label='Peak 2 Fit')
+				ax.legend()
+				ax.set_xlabel('Time delay (ns)', fontdict={'size': 15})
+				ax.set_ylabel('Autocorrelation value', fontdict={'size': 15})
+				plt.show()
+		
 		return delta_t
 
 	def find_l_pos_autocor_centered(self, ydata):
@@ -1166,7 +1251,7 @@ class Acdc:
 		
 		N_guess = 10*max(ydata)
 		sigma_guess = 0.1*(xdata[-1]-xdata[0])
-		mu_guess = 0.5*(xdata[-1]+xdata[0])
+		mu_guess = ydata.argmax()
 		A_guess = min(ydata)
 		p0 = [N_guess, sigma_guess, mu_guess, A_guess]
 		popt, pcov = curve_fit(gauss_const_back, xdata, ydata, p0=p0)
@@ -1177,7 +1262,7 @@ class Acdc:
 
 			fig, ax = plt.subplots()
 			ax.scatter(xdata, ydata, label='Raw')
-			# ax.plot(domain, gauss_const_back(domain, *p0), label='p0')
+			ax.plot(domain, gauss_const_back(domain, *p0), label='p0')
 			ax.plot(domain, gauss_const_back(domain, *popt), label='popt')
 			ax.legend()
 			plt.show()
@@ -1205,16 +1290,16 @@ class Acdc:
 		ax2.scatter(x_data, y_data)
 
 		# this fit thing isn't working yet
-		def gauss_func(x, N, sigma, mu, A):
-			return (N/np.sqrt(2*np.pi)*sigma)*np.exp(-1*(x-mu)*(x-mu)/(2*sigma*sigma)) + A
-		N_guess = 10*max(y_data)
-		sigma_guess = 0.1*(x_data[-1]-x_data[0])
-		mu_guess = 0.5*(x_data[-1]+x_data[0])
-		A_guess = min(y_data)
-		p0 = [N_guess, sigma_guess, mu_guess, A_guess]
-		popt, pcov = curve_fit(gauss_func, x_data, y_data, p0=p0)
-		x_data_domain = np.linspace(x_data[0], x_data[-1], 200)
-		ax2.plot(x_data_domain, gauss_func(x_data_domain, *popt))
+		# def gauss_func(x, N, sigma, mu, A):
+		# 	return (N/np.sqrt(2*np.pi)*sigma)*np.exp(-1*(x-mu)*(x-mu)/(2*sigma*sigma)) + A
+		# N_guess = 10*max(y_data)
+		# sigma_guess = 0.1*(x_data[-1]-x_data[0])
+		# mu_guess = 0.5*(x_data[-1]+x_data[0])
+		# A_guess = min(y_data)
+		# p0 = [N_guess, sigma_guess, mu_guess, A_guess]
+		# popt, pcov = curve_fit(gauss_func, x_data, y_data, p0=p0)
+		# x_data_domain = np.linspace(x_data[0], x_data[-1], 200)
+		# ax2.plot(x_data_domain, gauss_func(x_data_domain, *popt))
 
 		plt.show()
 
@@ -1355,7 +1440,7 @@ if __name__=='__main__':
 
 	test_acdc = Acdc(init_dict)
 
-	# test_acdc.import_raw_data(data_path)
+	test_acdc.import_raw_data(data_path)
 
 	# test_acdc.hist_single_cap_counts_vs_ped(10, 22)
 
@@ -1365,9 +1450,11 @@ if __name__=='__main__':
 
 	# time_domain = np.linspace(0, 0.0000255, 256)
 
-	# centers = test_acdc.find_event_centers()
-	centers = np.load(r'/home/cameronpoe/Desktop/lappd_tof_container/LAPPD_TOF_Analysis/centers_le_spec_autocor.npy')
-	test_acdc.plot_centers(centers)
+	centers = test_acdc.find_event_centers(events=938)
+	print(f'Average FWHM (all events): {sum(avg_fwhms)/len(avg_fwhms)} ns')
+	# centers = test_acdc.find_event_centers(events=4)
+	# centers = np.load(r'/home/cameronpoe/Desktop/lappd_tof_container/LAPPD_TOF_Analysis/centers_le_spec_autocor.npy')
+	# test_acdc.plot_centers(centers)
 	
 	exit()
 

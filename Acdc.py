@@ -15,7 +15,7 @@ from time import process_time
 
 avg_fwhms = []
 
-# Some quick helper functions
+# Some helper functions
 
 def convert_to_list(some_object):
 	"""Converts an object into a single-element list if the object is not already a list. Helps when a function works by going through elements of a list, but you want to pass a single element to that function.
@@ -28,6 +28,71 @@ def convert_to_list(some_object):
 
 	return some_object
 
+def find_extrema_spline(xdata, ydata):
+
+	spline_tuple = splrep(xdata, ydata, k=3, s=10000)
+	bspline = BSpline(*spline_tuple)
+	dbspline = bspline.derivative()
+	dcubic_spline = CubicSpline(xdata, dbspline(xdata))
+	extrema = dcubic_spline.solve(0, extrapolate=False)
+
+	return extrema, bspline
+
+def compute_sliding_function(xdata, ydata, lbound, rbound, stat_spline, func, slide_increment=1):
+	"""Handles the sliding/computing part of finding the autocorrelation function or lag-based chi-squared.
+		(ndarray)	xdata:				xdata of the waveform, i.e. the sample times
+		(ndarray)	ydata				ydata of the waveform, i.e. the voltages
+		(float)		lbound				left bound in the subdomain of xdata you wish to compute the sliding function over
+		(float)		rbound				right bound in the subdomain of xdata you wish to compute the sliding function over
+		(BSpline)	stat_spline			BSpline object interpolating the subrange of ydata over the subdomain of xdata
+		(float)		func				the sliding function you wish to apply. Takes as inputs stationary ydata and slid
+										ydata. For autocorrelation returns the integral of stat_ydata*slid_ydata. For chi-squared
+										returns integral of (stat_ydata-slid_ydata)**2
+		(float)		slide_increment=1	effectively the number of indices you're sliding the data by. Default is 1 (~250 ps), but 
+										can be set to less than 1.
+	"""
+
+	xdata_sliding = np.copy(xdata)
+	func_vals = []
+	lags = []
+	lag = 0
+	lag_factor = 25/256
+	while lag < 256:
+
+		xdata_sliding -= lag_factor*slide_increment*np.ones_like(xdata_sliding)
+		indices_inbounds = np.linspace(0,255,256,dtype=int)[(xdata_sliding >= lbound) & (xdata_sliding <= rbound)]
+		if len(indices_inbounds) == 0:
+			lag += slide_increment
+			continue
+
+		xdata_shifted_inbounds = xdata_sliding[indices_inbounds]
+		ydata_inbounds = ydata[indices_inbounds]
+		
+		if not indices_inbounds[0] == 0:
+			r_ind = indices_inbounds[0]
+			l_ind = r_ind - 1
+			lbound_yval = np.interp(lbound, [xdata_sliding[l_ind], xdata_sliding[r_ind]], [ydata[l_ind], ydata[r_ind]])
+			xdata_shifted_inbounds = np.insert(xdata_shifted_inbounds, 0, lbound)
+			ydata_inbounds = np.insert(ydata_inbounds, 0, lbound_yval)
+
+		if not indices_inbounds[-1] == 255:
+			l_ind = indices_inbounds[-1]
+			r_ind = l_ind + 1
+			rbound_yval = np.interp(rbound, [xdata_sliding[l_ind], xdata_sliding[r_ind]], [ydata[l_ind], ydata[r_ind]])
+			xdata_shifted_inbounds = np.append(xdata_shifted_inbounds, rbound)
+			ydata_inbounds = np.append(ydata_inbounds, rbound_yval)
+							
+		ydata_stationary = stat_spline(xdata_shifted_inbounds)
+
+		func_vals.append(func(ydata_inbounds, ydata_stationary, xdata_shifted_inbounds))
+		lags.append(lag_factor*lag)
+
+		lag += slide_increment
+
+	func_vals = np.array(func_vals)
+	lags = np.array(lags)
+
+	return lags, func_vals
 
 #This class represents the ACDC boards, and thus
 #in proxy an LAPPD - as in the LAPPD TOF system we plan
@@ -305,7 +370,7 @@ class Acdc:
 		return
 
 	def save_data_npz(self, file_name, directory_path=None):
-		"""Saves current sample times, sample times (320 clock), raw waveform, and calibrated waveform
+		"""Saves current sample times, sample times (320 clock), raw waveform, calibrated waveform, and uncalibrated sample times
 		xxx		
 		"""
 
@@ -316,7 +381,7 @@ class Acdc:
 			directory_path += r'/'
 
 		print(f'Saving data to \'{directory_path + file_name}\'')		
-		np.savez(directory_path + file_name, cur_times=np.copy(self.cur_times), cur_times_320=np.copy(self.cur_times_320), cur_waveforms_raw=np.copy(self.cur_waveforms_raw), cur_waveforms=np.copy(self.cur_waveforms))
+		np.savez(directory_path + file_name, cur_times=np.copy(self.cur_times), cur_times_320=np.copy(self.cur_times_320), cur_waveforms_raw=np.copy(self.cur_waveforms_raw), cur_waveforms=np.copy(self.cur_waveforms), sample_times=np.copy(self.sample_times))
 
 		return
 	
@@ -329,6 +394,7 @@ class Acdc:
 		self.cur_times_320 = data_array['cur_times_320']
 		self.cur_waveforms_raw = data_array['cur_waveforms_raw']
 		self.cur_waveforms = data_array['cur_waveforms']
+		self.sample_times = data_array['sample_times']
 
 		print('Successfully loaded!')
 
@@ -532,7 +598,7 @@ class Acdc:
 		return centers
 	
 	def largest_signal_ch(self, waveform):
-		"""Small helper function to retrieve the channel to be used in the find_l_pos functions.
+		"""Small function to retrieve the channel to be used in the find_l_pos functions.
 		Arguments:
 			(Acdc) self
 			(np.array) waveform: a single event's waveform (2D array) from which the optimal channel will be found		
@@ -562,8 +628,82 @@ class Acdc:
 				
 		return correct_ch, bad_channels
 	
-	def largest_signal_ch_old(self, waveform):
-		return np.absolute(waveform).max(axis=1).argmax()
+	def find_l_pos_autocor_full(self, xdata, ydata, display=False, diagnostic=False):
+		"""xxx fill in description
+		
+		"""
+
+		autocor_lbound = xdata[0]
+		autocor_rbound = xdata[-1]
+
+		# Defines the BSpline object for the stationary data
+		spline_tuple = splrep(xdata, ydata, k=3, s=10000)
+		bspline = BSpline(*spline_tuple)
+
+		def autocor_func(stat_ydata, slid_ydata, xdata_inbounds):
+			return trapezoid(stat_ydata*slid_ydata, xdata_inbounds)
+
+		lags, autocor_vals = compute_sliding_function(xdata, ydata, autocor_lbound, autocor_rbound, bspline, autocor_func)
+		
+		height_cutoff = 0.3*autocor_vals.max()
+		distance_between_peaks = 12 				# in units of indices
+		peak_region_radius = 12*(25/256)			# in units of ns
+
+		integral_peaks_rough_indices = find_peaks(autocor_vals, height=height_cutoff, distance=distance_between_peaks)[0]
+		integral_peaks_rough_times = lags[integral_peaks_rough_indices]
+
+		extremas = []
+		splines = []
+		domains = []
+		for integral_peak_rough in integral_peaks_rough_times:
+
+			integral_peak_region_cut = (lags > (integral_peak_rough-peak_region_radius)) & (lags < (integral_peak_rough+peak_region_radius))
+
+			lags_cut = lags[integral_peak_region_cut]
+			integrals_cut = autocor_vals[integral_peak_region_cut]
+
+			spline_tuple = splrep(lags_cut, integrals_cut, k=3, s=10000)
+			data_bspline = BSpline(*spline_tuple)
+			ddata_bspline = data_bspline.derivative()
+			
+			peak_region_domain_lower = integral_peak_rough-peak_region_radius
+			if peak_region_domain_lower < 0:
+				peak_region_domain_lower = 0
+
+			peak_region_domain = np.linspace(peak_region_domain_lower, integral_peak_rough+peak_region_radius, 100)
+			dcubic_spline = CubicSpline(peak_region_domain, ddata_bspline(peak_region_domain))
+
+			extrema = dcubic_spline.solve(0)
+
+			extrema = extrema[(extrema > (integral_peak_rough-peak_region_radius+3*(25/256))) & (extrema < (integral_peak_rough+peak_region_radius-3*(25/256)))]
+
+			if len(extrema) > 0:
+				extrema = extrema[data_bspline(extrema).argsort()][-1]
+			else:
+				extrema = integral_peak_rough
+			
+			extremas.append(extrema)
+			splines.append(data_bspline)
+			domains.append(peak_region_domain)
+
+		extremas = np.array(extremas)
+
+		if len(extremas) > 1:
+			print('Uh oh larger than 1!')
+			raise
+
+		if display:
+			fig2, ax2 = plt.subplots()
+			ax2.scatter(lags, autocor_vals, label='Discrete Autocorrelation', marker='.')
+			ax2.axvline(extremas[0], color='orange', label=f'Peak 1 (lag={round(extremas[0], 2)} ns)')
+			ax2.plot(domains[0], splines[0](domains[0]), color='pink', label='Peak 1 Spline')
+			# ax2.text(12.8,3.17e5, f'$\Delta t = {round(delta_t, 2)}$ ns', fontdict={'size': 16})
+			ax2.legend()
+			ax2.set_xlabel('Time delay (ns)')
+			ax2.set_ylabel('Autocorrelation value')
+			plt.show()
+				
+		return extremas[0]
 
 	def find_l_pos_autocor_new(self, xdata, ydata, display=False, diagnostic=False):
 		"""xxx fill in description
@@ -573,12 +713,12 @@ class Acdc:
 		integral_lower_bound = xdata[0]
 		integral_upper_bound = xdata[-1]
 
+		# Defines the BSpline object for the stationary data
 		cut = (xdata > integral_lower_bound) & (xdata < integral_upper_bound)
 		spline_subrange = ydata[cut]
 		spline_subdomain = xdata[cut]
 		spline_tuple = splrep(spline_subdomain, spline_subrange, k=3, s=10000)
 		bspline = BSpline(*spline_tuple)
-		cspline = CubicSpline(spline_subdomain, bspline(spline_subdomain))
 		
 		integrals = []
 		lags = []
@@ -596,9 +736,7 @@ class Acdc:
 				continue
 
 			xdata_shifted_inbounds = xdata_shifted[indices_inbounds]
-			
 			ydata_inbounds = ydata_shifted[indices_inbounds]
-			ydata_stationary = cspline(xdata_shifted_inbounds)
 			
 			if not indices_inbounds[0] == 0:
 				left_outbounds_ind = indices_inbounds[0] - 1
@@ -614,7 +752,7 @@ class Acdc:
 				xdata_shifted_inbounds = np.append(xdata_shifted_inbounds, integral_upper_bound)
 				ydata_inbounds = np.append(ydata_inbounds, right_border_yval)
 								
-			ydata_stationary = cspline(xdata_shifted_inbounds)
+			ydata_stationary = bspline(xdata_shifted_inbounds)
 
 			single_integral = trapezoid(ydata_inbounds*ydata_stationary, xdata_shifted_inbounds)
 
@@ -1868,7 +2006,6 @@ if __name__=='__main__':
 	# test_acdc.save_data_npz(file_name_i_want_to_save_as, directory_path=directory_to_save_to)
 	
 	test_acdc.load_data_npz(r'testData/processed_data/current_working_data.npz')
-
 	# test_acdc.hist_single_cap_counts_vs_ped(10, 22)
 
 	# test_acdc.plot_ped_corrected_pulse(154)
@@ -1891,7 +2028,7 @@ if __name__=='__main__':
 	#		25
 
 
-	centers = test_acdc.find_event_centers(DEBUG_EVENTS=False)
+	centers = test_acdc.find_event_centers(DEBUG_EVENTS=True, events=87)
 	# if len(avg_fwhms) != 0:
 	# 	print(f'Average FWHM (all events): {sum(avg_fwhms)/len(avg_fwhms)} ns')
 	# centers = test_acdc.find_event_centers(events=4)

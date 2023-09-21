@@ -10,7 +10,7 @@ from scipy.interpolate import splrep, BSpline, CubicSpline
 from scipy.signal import find_peaks
 from scipy.integrate import trapezoid
 import uproot
-import pylandau
+from pylandau import langau_pdf
 from time import process_time
 
 avg_fwhms = []
@@ -515,7 +515,7 @@ class Acdc:
 
 		return
 
-	def find_event_centers(self, events=None, DEBUG_EVENTS=False):
+	def find_event_centers(self, events=None, DEBUG_EVENTS=False, METHOD='langaus', SAVE=False):
 		"""xxx add description
 
 		"""
@@ -526,9 +526,10 @@ class Acdc:
 		else:
 			events = convert_to_list(events)
 
+
+		t1 = process_time()
 		centers = []
 		pos_saved = []
-
 		num_skipped_waveforms = 0
 		for i in events:
 
@@ -545,35 +546,56 @@ class Acdc:
 				# print(f'New largest ch: {largest_ch}\nOld largest ch: {largest_ch_OLD}')
 				l_pos_y_data = waveform[largest_ch]
 
-				if np.abs(l_pos_y_data[-1])/np.amax(np.abs(l_pos_y_data)) > 0.30:
-					print(f'Error with event {i} (likely has incorrect trigger)')
+				if DEBUG_EVENTS:
+					self.plot_ped_corrected_pulse(i, channels=largest_ch)
+
+				############## IN PROGRESS MISTRIGGER CUT ##############
+				l_pos_y_data_max = np.absolute(l_pos_y_data).max()
+				what_max_should_be = 200
+				if l_pos_y_data_max < what_max_should_be:
+					print(f'Error with event {i} (likely is just noise)')
+					num_skipped_waveforms += 1
 					if DEBUG_EVENTS:
 						raise
 					else:
 						continue
+
+				first_val = np.absolute(l_pos_y_data[0])
+				# subset_avg = np.absolute(np.average(l_pos_y_data[205:215]))
+				# if first_val >= 2.25*subset_avg and first_val >= 0.10*l_pos_y_data_max:
+				print(first_val/l_pos_y_data_max)
+				if first_val >= 0.15*l_pos_y_data_max:
+					print(f'Error with event {i} (likely has incorrect trigger)')
+					num_skipped_waveforms += 1
+					if DEBUG_EVENTS:
+						raise
+					else:
+						continue
+				########################################################
 				
 				DIAGNOSTIC_DATA = False
-				if DEBUG_EVENTS:
-					self.plot_ped_corrected_pulse(i, channels=largest_ch)
+
+				if 'langaus' in METHOD.lower():
+					if 'cfd' in METHOD.lower():
+						l_pos = self.find_l_pos_langaus(l_pos_x_data, l_pos_y_data, METHOD='cfd', display=DEBUG_EVENTS)
+					else:
+						METHOD = 'langaus_mpv'
+						l_pos = self.find_l_pos_langaus(l_pos_x_data, l_pos_y_data, display=DEBUG_EVENTS)
 				# l_pos_autocor_le = self.find_l_pos_autocor_le_subset(l_pos_x_data, l_pos_y_data, display=DEBUG_EVENTS, diagnostic=DIAGNOSTIC_DATA)
 				# l_pos_autocor_full = self.find_l_pos_autocor_full(l_pos_x_data, l_pos_y_data, display=DEBUG_EVENTS, diagnostic=DIAGNOSTIC_DATA)
 				# l_pos = self.find_l_pos_cfd(l_pos_y_data)
 				# l_pos_spline = self.find_l_pos_spline(l_pos_x_data, l_pos_y_data, display=DEBUG_EVENTS)
-				# l_pos_langaus = self.find_l_pos_langaus(l_pos_x_data, l_pos_y_data, display=DEBUG_EVENTS)
-				l_pos_chi_squared = self.find_l_pos_chi_squared(l_pos_x_data, l_pos_y_data, display=DEBUG_EVENTS)
+				# l_pos_chi_squared = self.find_l_pos_chi_squared(l_pos_x_data, l_pos_y_data, display=DEBUG_EVENTS)
 				# l_pos = 1.2
 
 				# xxx what should I do with bad channels? maybe set to zero, maybe something else
 				# for ch in bad_channels:
 				# 	waveform[ch] = np.zeros_like(waveform[ch])
-				t_pos = self.find_t_pos_ls_gauss(waveform, display=DEBUG_EVENTS)
+				# t_pos = self.find_t_pos_ls_gauss(waveform, display=DEBUG_EVENTS)
 				# t_pos = self.find_t_pos_simple(waveform)
-				# t_pos = 1.2
+				t_pos = 1.2
 
-				l_pos = l_pos_chi_squared
-
-				centers.append((l_pos, t_pos))
-				pos_saved.append((i, l_pos))
+				centers.append((i, l_pos, t_pos))
 
 			except:
 				print(f'Error with event {i}')
@@ -582,17 +604,20 @@ class Acdc:
 					raise
 				else:
 					pass
+		t2 = process_time()
 
-		
+		print('\n')
+		print('--------------- Calculating Centers ---------------')
 		print(f'Number of skipped waveforms: {num_skipped_waveforms}')
 		print(f'Total number of waveforms: {len(events)}')
 		print(f'Percent skipped: {round(100*num_skipped_waveforms/len(events), 2)}%')
+		print(f'Time to calculate centers: {round(t2-t1, 2)} sec')
+		print('---------------------------------------------------')
 						
 		centers = np.array(centers)
-		pos_saved = np.array(pos_saved)
 
-		# np.save('x_pos_spline_cfd', pos_saved)
-		# np.save('centers_spline-cfd_gaussian_new', centers)
+		if SAVE == True:
+			np.save('centers_' + METHOD, centers)
 
 		return centers
 	
@@ -775,62 +800,12 @@ class Acdc:
 			ax3.set_title('Integration bounds for the autocorrelation function')
 			plt.show()
 
-		integrals = []
-		lags = []
+		def autocor_func(stat_ydata, slid_ydata, xdata_inbounds):
+			return trapezoid(stat_ydata*slid_ydata, xdata_inbounds)
+		
+		lags, autocor_vals = compute_sliding_function(xdata, ydata, integral_lower_bound, integral_upper_bound, prompt_bspline, autocor_func)
 
-		lag = 0
-		lag_increment = 1
-		ydata_shifted = np.copy(ydata)
-		xdata_shifted = np.copy(xdata)
-		while lag < 256:
-
-			xdata_shifted -= (25/256)*lag_increment*np.ones_like(xdata_shifted)
-			indices_inbounds = np.linspace(0,255,256,dtype=int)[(xdata_shifted > integral_lower_bound) & (xdata_shifted < integral_upper_bound)]
-			if len(indices_inbounds) == 0:
-				lag += lag_increment
-				continue
-
-			xdata_shifted_inbounds = xdata_shifted[indices_inbounds]
-			
-			ydata_inbounds = ydata_shifted[indices_inbounds]
-			ydata_stationary = prompt_cspline(xdata_shifted_inbounds)
-
-			# standard autocor method
-			# single_integral = np.sum(ydata_inbounds*ydata_stationary)
-			
-			# trapezoidal integral method
-			left_outbounds_ind = indices_inbounds[0] - 1
-			if not left_outbounds_ind < 0:
-				left_slope = (ydata_inbounds[0] - ydata_shifted[left_outbounds_ind])/(xdata_shifted_inbounds[0] - xdata_shifted[left_outbounds_ind])
-				left_border_yval = ydata_inbounds[0] + left_slope*(integral_lower_bound-xdata_shifted_inbounds[0])
-				xdata_shifted_inbounds = np.insert(xdata_shifted_inbounds, 0, integral_lower_bound)
-				ydata_inbounds = np.insert(ydata_inbounds, 0, left_border_yval)
-
-			right_outbounds_ind = indices_inbounds[-1] + 1
-			if right_outbounds_ind != 256:
-				right_slope = (ydata_shifted[right_outbounds_ind]-ydata_inbounds[-1])/(xdata_shifted[right_outbounds_ind]-xdata_shifted_inbounds[-1])
-				right_border_yval = ydata_inbounds[-1] + right_slope*(integral_upper_bound-xdata_shifted_inbounds[-1])
-				xdata_shifted_inbounds = np.append(xdata_shifted_inbounds, integral_upper_bound)
-				ydata_inbounds = np.append(ydata_inbounds, right_border_yval)
-								
-			ydata_stationary = prompt_cspline(xdata_shifted_inbounds)
-
-			single_integral = trapezoid(ydata_inbounds*ydata_stationary, xdata_shifted_inbounds)
-			print(single_integral)
-			print(trapezoid(ydata_inbounds, xdata_shifted_inbounds) * trapezoid(ydata_stationary, xdata_shifted_inbounds))
-
-			# chi-squared method
-			# single_integral = np.sum((ydata_inbounds - ydata_stationary)*(ydata_inbounds - ydata_stationary))
-
-			integrals.append(single_integral)
-			lags.append((25/256)*lag)
-
-			lag += lag_increment
-
-		integrals = np.array(integrals)
-		lags = np.array(lags)
-
-		height_cutoff = 0.6*integrals.max()
+		height_cutoff = 0.6*autocor_vals.max()
 		distance_between_peaks = 5				# in units of indices
 		peak_region_radius = 5*(25/256)			# in units of ns
 
@@ -841,10 +816,10 @@ class Acdc:
 						return (N/(sigma*np.sqrt(2*np.pi)))*np.exp(-0.5*(x-mu)*(x-mu)/(sigma*sigma))
 			elif diagnostic_method == 'langau':
 				def diag_func(x, A, mu, xi, sigma):
-					return A*pylandau.langau_pdf(x, mu, xi, sigma)
+					return A*langau_pdf(x, mu, xi, sigma)
 			diag_funcs = []
 
-		integral_peaks_rough_indices = find_peaks(integrals, height=height_cutoff, distance=distance_between_peaks)[0]
+		integral_peaks_rough_indices = find_peaks(autocor_vals, height=height_cutoff, distance=distance_between_peaks)[0]
 		integral_peaks_rough_times = lags[integral_peaks_rough_indices]
 
 		extremas = []
@@ -855,7 +830,7 @@ class Acdc:
 			integral_peak_region_cut = (lags > (integral_peak_rough-peak_region_radius)) & (lags < (integral_peak_rough+peak_region_radius))
 
 			lags_cut = lags[integral_peak_region_cut]
-			integrals_cut = integrals[integral_peak_region_cut]
+			integrals_cut = autocor_vals[integral_peak_region_cut]
 
 			spline_tuple = splrep(lags_cut, integrals_cut, k=3, s=10000)
 			data_bspline = BSpline(*spline_tuple)
@@ -884,7 +859,7 @@ class Acdc:
 			if diagnostic:
 				integral_peak_region_cut_diag = (lags > (integral_peak_rough-large_region_radius)) & (lags < (integral_peak_rough+large_region_radius))
 
-				integrals_cut_diag = integrals[integral_peak_region_cut_diag]
+				integrals_cut_diag = autocor_vals[integral_peak_region_cut_diag]
 				lags_cut_diag = lags[integral_peak_region_cut_diag]
 
 				if diagnostic_method == 'gauss':
@@ -917,7 +892,7 @@ class Acdc:
 
 		if display:
 			fig2, ax2 = plt.subplots()
-			ax2.scatter(lags, integrals, label='Discrete Autocorrelation', marker='.')
+			ax2.scatter(lags, autocor_vals, label='Discrete Autocorrelation', marker='.')
 			ax2.axvline(extremas[0], color='orange', label=f'Peak 1 (lag={round(extremas[0], 2)} ns)')
 			ax2.axvline(extremas[1], color='green', label=f'Peak 2 (lag={round(extremas[1], 2)} ns)')
 			ax2.plot(domains[0], splines[0](domains[0]), color='pink', label='Peak 1 Spline')
@@ -951,7 +926,7 @@ class Acdc:
 			if display:
 				fig, ax = plt.subplots()
 				fig.set_size_inches([10.5, 8])
-				ax.scatter(lags, integrals, label='Discrete Autocorrelation', marker='.')
+				ax.scatter(lags, autocor_vals, label='Discrete Autocorrelation', marker='.')
 				whole_domain = np.linspace(-5, lags[-1], 6000)
 				diag_func1_yvals = diag_func(whole_domain, *diag_funcs[0])
 				ax.plot(whole_domain, diag_func1_yvals, color='pink', label='Peak 1 Fit')
@@ -1090,105 +1065,89 @@ class Acdc:
 
 		return delta_t
 
-	def find_l_pos_langaus(self, xdata, ydata, display=False):
+	def find_l_pos_langaus(self, xdata, ydata, METHOD='mpv', display=False):
 
+		# A = scale factor, mu = most probable value (maximum), sigma = gaussian standard dev, xi = area under curver
 		def fitfun(x, *p):
 			A, mu, sigma, xi = p
-			#return A*np.exp(-(x-mu)**2/(2.*sigma**2))
-			#return A*landau.pdf(x=x,x_mpv=mu,xi=sigma)
-			#return A*langauss.pdf(x=x,landau_x_mpv=mu,landau_xi=xi,gauss_sigma=sigma)
-			return A*pylandau.langau_pdf(x, mu, xi, sigma)
+			return A*langau_pdf(x, mu, xi, sigma)
 
+		# xi is set equal for both since the reflect peak should have the same area as prompt?
 		def double_fitfun(x, *p):
 			A1, mu1, sigma1, xi1, A2, mu2, sigma2, y0 = p
-			#return A*np.exp(-(x-mu)**2/(2.*sigma**2))
-			#return A*landau.pdf(x=x,x_mpv=mu,xi=sigma)
-			#return A*langauss.pdf(x=x,landau_x_mpv=mu,landau_xi=xi,gauss_sigma=sigma)
 			return fitfun(x, A1, mu1, sigma1, xi1) + fitfun(x, A2, mu2, sigma2, xi1) + y0
 
+		rough_peaks_indices = find_peaks(-ydata, height=(-0.6)*ydata.min(), distance = 22)[0]
+		rough_peaks = xdata[rough_peaks_indices]
 
-		peaks2_indices = find_peaks(-ydata, height=(-0.6)*ydata.min(), distance = 22)[0]
-		peaks2_times = xdata[peaks2_indices]
-
-		peaks = []
-		csl = []
-		coefs = []
-
-		xp1Cut = (xdata > (peaks2_times[0]-30*25/256)) & (xdata < (peaks2_times[1]+25*25/256))
+		xp1Cut = (xdata > (rough_peaks[0]-30*25/256)) & (xdata < (rough_peaks[1]+25*25/256))
 		xdata_cut = xdata[xp1Cut]
 		ydata_cut = ydata[xp1Cut]
 
 		param_bounds=([-1000000, 0, 0.05, 0.1, -1000000, 0.05, 0.1, -100],[-10, 256*25/256, 10, 10, -10, 256*25/256, 10, 100])
-		p0 = [-np.absolute(ydata_cut).max(), 1.0*peaks2_times[0], 0.5, 0.5, -np.absolute(ydata_cut).max(), 1.0*peaks2_times[1], 0.5, 0.]
+		p0 = [-np.absolute(ydata_cut).max(), 1.0*rough_peaks[0], 0.5, 0.5, -np.absolute(ydata_cut).max(), 1.0*rough_peaks[1], 0.5, 0.]
+
+		coeffs, var_matrix2 = curve_fit(double_fitfun, xdata_cut, ydata_cut, p0=p0, bounds=param_bounds)
+
+		peaks = np.array((coeffs[5],coeffs[1]))
+
+		# Now doing CFD peaks
+		peaks_cfd = []
+		cfd_val = 0.1
+
+		# Find minimum y-val of the prompt pulse's langaus fit
+		#	Lambda function defines the prompt pulse's langaus fit
+		# 	fmin finds the x value that produces a minimum in the fit, starting from mu1.
+		#	fitfun returns the y-val associated with that x-val
+		#	lamfun returns the prompt pulse's langaus fit shifted down by 10% of the pulse max
+		#	fsolve finds the roots of the offset first pulse, effectively the x-val that gives 10% the pulse max
+		#	.min() returns the lesser x-val, on the leading edge, since generally the langaus will have two that cross 10%
+		funmin1 = fitfun(fmin(lambda x: fitfun(x, *coeffs[:4]), coeffs[1], disp=False), *coeffs[:4])
+		lamfun1 = lambda x: fitfun(x, *coeffs[:4]) - funmin1*cfd_val
+		peaks_cfd.append(fsolve(lamfun1, [coeffs[1]-10*25/256]).min())
+
+		reflect_popt = (coeffs[4], coeffs[5], coeffs[6], coeffs[3])
+		funmin2 = fitfun(fmin(lambda x: fitfun(x, *reflect_popt), coeffs[5], disp=False), *reflect_popt)
+		lamfun2 = lambda x: fitfun(x, *reflect_popt) - funmin2*cfd_val
+		peaks_cfd.append(fsolve(lamfun2, [coeffs[5]-10*25/256]).min())
+
+		peaks_cfd = np.array(peaks_cfd)
 
 		if display:
-			fig4, ax4 = plt.subplots()
-			xdomain = np.linspace(xdata_cut[0], xdata_cut[-1], 500)
-			yvals_fromfunc = double_fitfun(xdomain, *p0)
-			ax4.scatter(xdata_cut, ydata_cut)
-			ax4.plot(xdomain, yvals_fromfunc)
-			plt.show()
-
-		coeff2, var_matrix2 = curve_fit(double_fitfun, xdata_cut, ydata_cut, p0=p0, bounds=param_bounds)
-
-		peaks = np.array((coeff2[5],coeff2[1]))
-
-
-		peaks3 = []
-
-		funmin1 = fitfun(fmin(lambda x: fitfun(x, *coeff2[:4]), coeff2[1], disp=False), *coeff2[:4])
-		#print("Fmin:", funmin1)
-		lamfun1 = lambda x: fitfun(x, *coeff2[:4]) - funmin1*0.1
-		peaks3.append(fsolve(lamfun1, [coeff2[1]-10]).min())
-
-		funmin2 = fitfun(fmin(lambda x: fitfun(x, *(coeff2[4], coeff2[5], coeff2[6], coeff2[3])), coeff2[5], disp=False), 
-											*(coeff2[4], coeff2[5], coeff2[6], coeff2[3]))
-		#print("Fmin:", funmin2)
-		lamfun2 = lambda x: fitfun(x, *(coeff2[4], coeff2[5], coeff2[6], coeff2[3])) - funmin2*0.1
-		peaks3.append(fsolve(lamfun2, [coeff2[5]-10]).min())
-
-		peaks3 = np.array(peaks3)
-
-		if display:
-			print(peaks3)
-			print("Rough:",  peaks2_times.max()-peaks2_times.min())
+			print("Rough:",  rough_peaks.max()-rough_peaks.min())
 			print("MPV:",  peaks.max()-peaks.min())
-			print("CFD:",  peaks3.max()-peaks3.min())
+			print("CFD:",  peaks_cfd.max()-peaks_cfd.min())
 
 			fig, (ax1) = plt.subplots(1, 1)
 			ax1.plot(xdata, ydata, label="Pulse")
-			for i, (x, bs) in enumerate(csl):
-				ax1.plot(x, bs, label="SingleFit_%i"%(i+1), color='orange')
-			ax1.plot(xdata_cut, fitfun(xdata_cut,*coeff2[:4]), label="doublefit_1", color='pink')
-			ax1.plot(xdata_cut, fitfun(xdata_cut,*(coeff2[4], coeff2[5], coeff2[6], coeff2[3])), label="doublefit_2", color='darksalmon')
-			ax1.plot(xdata_cut, double_fitfun(xdata_cut,*coeff2), label="doublefit", color='magenta')
-			#ax1.plot(xdata_cut, lamfun1(xdata_cut), label="doublefit", color='black')
-			#ax1.plot(xdata_cut, lamfun2(xdata_cut), label="doublefit", color='black')
-			#ax1.plot(xplot, dbs(xplot))
-			#ax1.plot(xplot, dcs(xplot))
-			#for x in peaks:
-			#    ax1.axvline(x, color="green")
+			ax1.plot(xdata_cut, fitfun(xdata_cut,*coeffs[:4]), label="Double fit (first peak)", color='pink')
+			ax1.plot(xdata_cut, fitfun(xdata_cut,*(coeffs[4], coeffs[5], coeffs[6], coeffs[3])), label="Double fit (second peak)", color='darksalmon')
+			ax1.plot(xdata_cut, double_fitfun(xdata_cut,*coeffs), label="doublefit", color='magenta')
 
-			#for x in peaks2:
-			#    ax1.axvline(x, color="red")
-			ax1.axvline(coeff2[1], color="blue")
-			ax1.axvline(coeff2[5], color="blue")
-			for x in peaks3:
+			# Display MPV peaks
+			for x in peaks:
+				ax1.axvline(x, color="blue")
+
+			# Display CFD peaks
+			for x in peaks_cfd:
 				ax1.axvline(x, color="black")
-
-			ax1.set_xlabel("Sample")
-			ax1.set_ylabel("ADC value (ped corrected)")
-
-			#ax1.axvline(cw_low, color="green")
-			ax1.axvline(40*25/256, color="green")
-
-			ax1.legend()
 
 			ax1.text(90*25/256,-1144, f'$\Delta t =$ {round((peaks.max()-peaks.min()), 2)}', fontdict={'size': 14})
 
+			ax1.set_xlabel("Sample times")
+			ax1.set_ylabel("ADC value (ped corrected)")
+			ax1.legend()
+			ax1.xaxis.set_ticks_position('both')
+			ax1.yaxis.set_ticks_position('both')
 			fig.tight_layout()
+			plt.minorticks_on()
 
-		return (peaks.max()-peaks.min())
+			plt.show()
+
+		if METHOD.lower() == 'mpv':
+			return (peaks.max()-peaks.min())
+		elif METHOD.lower() == 'cfd':
+			return (peaks_cfd.max() - peaks_cfd.min())
 
 	def find_l_pos_spline(self, xdata, ydata, display=False):
 
@@ -1489,29 +1448,11 @@ if __name__=='__main__':
 
 	# test_acdc.plot_raw_lappd(350)
 
-	# time_domain = np.linspace(0, 0.0000255, 256)
-
-
-
-	# left off: changed how largest_ch is calculated, and now I am not even getting bad events in the second line (e 58, 59, 305, etc)
-	# need to go back in and see how channel changes before and after i did this implementation
-
-	# Error-inducing events in first 500 events for Langaus
-	# Confirmed bad events (from single incorrect cap voltage spike issue): 
-	# 		53, 68, 109, 130, 217, 241, 313, 413, 476
-	# Confirmed bad events (incorrect trigger, missing data):
-	#		58, 59, 305, 386, 500
-	# Confirmed bad events (no signal, just noise)
-	#		25
-
-
-	centers = test_acdc.find_event_centers(DEBUG_EVENTS=True, events=87)
-	# if len(avg_fwhms) != 0:
-	# 	print(f'Average FWHM (all events): {sum(avg_fwhms)/len(avg_fwhms)} ns')
-	# centers = test_acdc.find_event_centers(events=4)
-	# centers = np.load(r'/home/cameronpoe/Desktop/lappd_tof_container/centers_chi-squared_gaussian_new.npy')
-	# centers = np.load(r'/home/cameronpoe/Desktop/lappd_tof_container/LAPPD_TOF_Analysis/centers_langaus_gaussian_new.npy')
-	# test_acdc.plot_centers(centers)
+	event_subset = np.linspace(500, 3000, 2501, dtype=int)
+	# bad_events = [554, 592, 593, 594, 632, 636, 709, 783, 854, 878, 887, 923, 962, 1033, 1047, 1099, 1139, 1180, 1240]
+	# bad_events = [616, 714, 1074, 1162, 1174]
+	# bad_events = [783]
+	centers = test_acdc.find_event_centers(METHOD='langaus_mpv', DEBUG_EVENTS=True, events=560)
 	
 	exit()
 

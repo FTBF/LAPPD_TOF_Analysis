@@ -578,6 +578,8 @@ class Acdc:
 				if 'langaus' in METHOD.lower():
 					if 'cfd' in METHOD.lower():
 						l_pos = self.find_l_pos_langaus(l_pos_x_data, l_pos_y_data, METHOD='cfd', display=DEBUG_EVENTS)
+					elif 'both' in METHOD.lower():
+						l_pos = self.find_l_pos_langaus(l_pos_x_data, l_pos_y_data, METHOD='both', display=DEBUG_EVENTS)
 					else:
 						METHOD = 'langaus_mpv'
 						l_pos = self.find_l_pos_langaus(l_pos_x_data, l_pos_y_data, display=DEBUG_EVENTS)
@@ -1066,6 +1068,12 @@ class Acdc:
 		return delta_t
 
 	def find_l_pos_langaus(self, xdata, ydata, METHOD='mpv', display=False):
+		"""xxx
+			main point is does mpv, cfd, and both for METHOD (default is mpv)
+			mpv - returns diff the langaus mu's (most probable value)
+			cfd - returns diff the x-vals that give 10% the pulse height
+			both - returns mpv, but also calculated and displays cfd
+		"""
 
 		# A = scale factor, mu = most probable value (maximum), sigma = gaussian standard dev, xi = area under curver
 		def fitfun(x, *p):
@@ -1089,34 +1097,34 @@ class Acdc:
 
 		coeffs, var_matrix2 = curve_fit(double_fitfun, xdata_cut, ydata_cut, p0=p0, bounds=param_bounds)
 
-		peaks = np.array((coeffs[5],coeffs[1]))
+		if METHOD.lower() == 'mpv':
+			peaks = np.array((coeffs[5],coeffs[1]))
+		else:
+			# Now doing CFD peaks
+			peaks = []
+			cfd_val = 0.1
 
-		# Now doing CFD peaks
-		peaks_cfd = []
-		cfd_val = 0.1
+			# Find minimum y-val of the prompt pulse's langaus fit
+			#	Lambda function defines the prompt pulse's langaus fit
+			# 	fmin finds the x value that produces a minimum in the fit, starting from mu1.
+			#	fitfun returns the y-val associated with that x-val
+			#	lamfun returns the prompt pulse's langaus fit shifted down by 10% of the pulse max
+			#	fsolve finds the roots of the offset first pulse, effectively the x-val that gives 10% the pulse max
+			#	.min() returns the lesser x-val, on the leading edge, since generally the langaus will have two that cross 10%
+			funmin1 = fitfun(fmin(lambda x: fitfun(x, *coeffs[:4]), coeffs[1], disp=False), *coeffs[:4])
+			lamfun1 = lambda x: fitfun(x, *coeffs[:4]) - funmin1*cfd_val
+			peaks.append(fsolve(lamfun1, [coeffs[1]-10*25/256]).min())
 
-		# Find minimum y-val of the prompt pulse's langaus fit
-		#	Lambda function defines the prompt pulse's langaus fit
-		# 	fmin finds the x value that produces a minimum in the fit, starting from mu1.
-		#	fitfun returns the y-val associated with that x-val
-		#	lamfun returns the prompt pulse's langaus fit shifted down by 10% of the pulse max
-		#	fsolve finds the roots of the offset first pulse, effectively the x-val that gives 10% the pulse max
-		#	.min() returns the lesser x-val, on the leading edge, since generally the langaus will have two that cross 10%
-		funmin1 = fitfun(fmin(lambda x: fitfun(x, *coeffs[:4]), coeffs[1], disp=False), *coeffs[:4])
-		lamfun1 = lambda x: fitfun(x, *coeffs[:4]) - funmin1*cfd_val
-		peaks_cfd.append(fsolve(lamfun1, [coeffs[1]-10*25/256]).min())
+			reflect_popt = (coeffs[4], coeffs[5], coeffs[6], coeffs[3])
+			funmin2 = fitfun(fmin(lambda x: fitfun(x, *reflect_popt), coeffs[5], disp=False), *reflect_popt)
+			lamfun2 = lambda x: fitfun(x, *reflect_popt) - funmin2*cfd_val
+			peaks.append(fsolve(lamfun2, [coeffs[5]-10*25/256]).min())
 
-		reflect_popt = (coeffs[4], coeffs[5], coeffs[6], coeffs[3])
-		funmin2 = fitfun(fmin(lambda x: fitfun(x, *reflect_popt), coeffs[5], disp=False), *reflect_popt)
-		lamfun2 = lambda x: fitfun(x, *reflect_popt) - funmin2*cfd_val
-		peaks_cfd.append(fsolve(lamfun2, [coeffs[5]-10*25/256]).min())
-
-		peaks_cfd = np.array(peaks_cfd)
+			peaks = np.array(peaks)
 
 		if display:
-			print("Rough:",  rough_peaks.max()-rough_peaks.min())
-			print("MPV:",  peaks.max()-peaks.min())
-			print("CFD:",  peaks_cfd.max()-peaks_cfd.min())
+			print(f'Rough: {rough_peaks.max()-rough_peaks.min()}')
+			print(f'{METHOD}: {peaks.max()-peaks.min()}')
 
 			fig, (ax1) = plt.subplots(1, 1)
 			ax1.plot(xdata, ydata, label="Pulse")
@@ -1124,15 +1132,16 @@ class Acdc:
 			ax1.plot(xdata_cut, fitfun(xdata_cut,*(coeffs[4], coeffs[5], coeffs[6], coeffs[3])), label="Double fit (second peak)", color='darksalmon')
 			ax1.plot(xdata_cut, double_fitfun(xdata_cut,*coeffs), label="doublefit", color='magenta')
 
-			# Display MPV peaks
+			# Displays the peaks
 			for x in peaks:
 				ax1.axvline(x, color="blue")
 
-			# Display CFD peaks
-			for x in peaks_cfd:
-				ax1.axvline(x, color="black")
+			# Displays MPV peaks alongside CFD peaks
+			if METHOD.lower() == 'both':
+				ax1.axvline(coeffs[5], color='green')
+				ax1.axvline(coeffs[1], color='green')
 
-			ax1.text(90*25/256,-1144, f'$\Delta t =$ {round((peaks.max()-peaks.min()), 2)}', fontdict={'size': 14})
+			# ax1.text(90*25/256,-1144, f'$\Delta t =$ {round((peaks.max()-peaks.min()), 2)}', fontdict={'size': 14})
 
 			ax1.set_xlabel("Sample times")
 			ax1.set_ylabel("ADC value (ped corrected)")
@@ -1144,10 +1153,7 @@ class Acdc:
 
 			plt.show()
 
-		if METHOD.lower() == 'mpv':
-			return (peaks.max()-peaks.min())
-		elif METHOD.lower() == 'cfd':
-			return (peaks_cfd.max() - peaks_cfd.min())
+		return peaks.max()-peaks.min()
 
 	def find_l_pos_spline(self, xdata, ydata, display=False):
 
@@ -1452,7 +1458,7 @@ if __name__=='__main__':
 	# bad_events = [554, 592, 593, 594, 632, 636, 709, 783, 854, 878, 887, 923, 962, 1033, 1047, 1099, 1139, 1180, 1240]
 	# bad_events = [616, 714, 1074, 1162, 1174]
 	# bad_events = [783]
-	centers = test_acdc.find_event_centers(METHOD='langaus_mpv', DEBUG_EVENTS=True, events=560)
+	centers = test_acdc.find_event_centers(METHOD='langaus_both', DEBUG_EVENTS=True, events=560)
 	
 	exit()
 

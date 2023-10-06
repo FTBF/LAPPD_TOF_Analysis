@@ -140,7 +140,7 @@ def compute_sliding_function(xdata, ydata, lbound, rbound, stat_spline, func, sl
 
 	return lags, func_vals
 
-def find_leading_edge(xdata, ydata, display):
+def find_leading_edge(xdata, ydata, display, SPLINE_CFD=False):
 
 	# Determines the indices of the peaks in the prompt and reflected pulses
 	height_cutoff = -0.6*ydata.max()
@@ -153,14 +153,14 @@ def find_leading_edge(xdata, ydata, display):
 	reflect_lbound = reflect_peak_index - int((reflect_peak_index-prompt_peak_index)/2)-5 # lower bound is a bit left of the midway between peaks
 	reflect_ubound = reflect_peak_index + 6
 	ydata_subrange = ydata[reflect_lbound:reflect_ubound]
-	subdomain = xdata[reflect_lbound:reflect_ubound]
+	reflect_subdomain = xdata[reflect_lbound:reflect_ubound]
 	peak_region_lower, peak_region_upper = xdata[reflect_peak_index-4], xdata[reflect_peak_index+4]
 
 	# Solves for the extrema of the reflect peak
-	spline_tuple = splrep(subdomain, ydata_subrange, k=3, s=10000)
+	spline_tuple = splrep(reflect_subdomain, ydata_subrange, k=3, s=10000)
 	reflect_bspline = BSpline(*spline_tuple)
 	reflect_dbspline = reflect_bspline.derivative()
-	reflect_dcubic_spline = CubicSpline(subdomain, reflect_dbspline(subdomain))
+	reflect_dcubic_spline = CubicSpline(reflect_subdomain, reflect_dbspline(reflect_subdomain))
 	extrema = reflect_dcubic_spline.solve(0, extrapolate=False)
 	reflect_peak_max = reflect_bspline(extrema[(extrema > peak_region_lower) & (extrema < peak_region_upper)])	# finds the extrema that is near our original find_peaks value
 	reflect_peak_max = reflect_peak_max[0]
@@ -207,8 +207,14 @@ def find_leading_edge(xdata, ydata, display):
 		ax3.set_title('Reflection-dependent Leading Edge Bounds')
 		ax3.set_xlim(1.6, 9.1)
 		plt.show()
-
-	return lbound, rbound, prompt_cubic_spline
+	
+	if SPLINE_CFD:
+		reflect_cubicspline = CubicSpline(reflect_subdomain, reflect_bspline(reflect_subdomain))
+		r_intersects = reflect_cubicspline.solve(reflect_peak_min_val, extrapolate=False)
+		reflect_cfd_pos = (r_intersects[r_intersects < xdata[reflect_peak_index]])[-1]
+		return lbound, reflect_cfd_pos
+	else:
+		return lbound, rbound, prompt_cubic_spline
 
 #This class represents the ACDC boards, and thus
 #in proxy an LAPPD - as in the LAPPD TOF system we plan
@@ -1336,83 +1342,25 @@ class Acdc:
 
 		return delta_t
 
-	def find_l_pos_spline_cfd(self, xdata, ydata, cfd_val=0.4, display=False):
+	def find_l_pos_spline_cfd(self, xdata, ydata, display=False):
 		"""xxx add description
 		
 		"""
 
-		# Determines the indices of the peaks in the prompt and reflected pulses
-		height_cutoff = -0.6*ydata.max()
-		distance_between_peaks = 20		# in units of indices
-		peak_region_radius = 15			# in units of indices
-		peaks_rough = find_peaks(-1*ydata, height=height_cutoff, distance=distance_between_peaks)[0]
-		prompt_peak_index, reflect_peak_index = np.sort(peaks_rough[ydata[peaks_rough].argsort()[0:2]])
-	
-		# Creates subregions of data around the reflect peak
-		reflect_lbound = reflect_peak_index - int((reflect_peak_index-prompt_peak_index)/2)+3 
-		reflect_ubound = reflect_peak_index + 6
-		ydata_subrange = ydata[reflect_lbound:reflect_ubound]
-		subdomain = xdata[reflect_lbound:reflect_ubound]
-		peak_region_lower, peak_region_upper = xdata[reflect_peak_index-4], xdata[reflect_peak_index+4]
-
-		# Solves for the extrema of the reflect peak
-		spline_tuple = splrep(subdomain, ydata_subrange, k=3, s=10000)
-		reflect_bspline = BSpline(*spline_tuple)
-		dbspline = reflect_bspline.derivative()
-		reflect_cubicspline = CubicSpline(subdomain, reflect_bspline(subdomain))
-		dcubic_spline = CubicSpline(subdomain, dbspline(subdomain))
-		extrema = dcubic_spline.solve(0, extrapolate=False)
-
-		reflect_peak_max_time = extrema[(extrema > peak_region_lower) & (extrema < peak_region_upper)][0]
-		reflect_peak_max = reflect_bspline(reflect_peak_max_time)
-		reflect_intersects = reflect_cubicspline.solve(cfd_val*reflect_peak_max, extrapolate=False)
-		reflect_intersects = reflect_intersects[reflect_intersects < reflect_peak_max_time]
-		print(reflect_intersects)
-		fig, ax = plt.subplots()
-		ax.plot(subdomain, reflect_bspline(subdomain))
-		for val in reflect_intersects:
-			ax.axvline(val)
-		plt.show()
-		if len(reflect_intersects) != 1:
-			print('Reflect intersects length != 1')
-			raise
-		reflect_intersect = reflect_intersects[0]
-
-		# repeating the spline for the prompt peak now
-		prompt_lbound = prompt_peak_index - 14
-		if prompt_lbound < 0:
-			prompt_lbound = 0
-		prompt_ubound = prompt_peak_index + 6
-		prompt_subrange = ydata[prompt_lbound:prompt_ubound]
-		prompt_subdomain = xdata[prompt_lbound:prompt_ubound]
-		prompt_tuple = splrep(prompt_subdomain, prompt_subrange, k=3, s=10000)
-		prompt_bspline = BSpline(*prompt_tuple)
-		prompt_dbspline = prompt_bspline.derivative()
-		prompt_cubicspline = CubicSpline(prompt_subdomain, prompt_bspline(prompt_subdomain))
-		prompt_dcspline = CubicSpline(prompt_subdomain, prompt_dbspline(prompt_subdomain))
-		prompt_extrema = prompt_dcspline.solve(0)
-		peak_region_lower, peak_region_upper = xdata[prompt_peak_index-4], xdata[prompt_peak_index+4]
-		prompt_peak_max_time = prompt_extrema[(prompt_extrema > peak_region_lower) & (prompt_extrema < peak_region_upper)][0]
-		prompt_peak_max = prompt_bspline(prompt_peak_max_time)
-		prompt_intersects = prompt_cubicspline.solve(cfd_val*prompt_peak_max, extrapolate=False)
-		prompt_intersects = prompt_intersects[prompt_intersects < prompt_peak_max_time]
-		if len(prompt_intersects) != 1:
-			print('Prompt intersects length != 1')
-			raise
-		prompt_intersect = prompt_intersects[0]
+		p_intersect, r_intersect = find_leading_edge(xdata, ydata, display=display, SPLINE_CFD=True)
 
 		if display:
 			fig3, ax3 = plt.subplots()
 			ax3.scatter(xdata, ydata, marker='.', label='Raw data')
 
-			reflect_peak_spline_domain = np.linspace(xdata[reflect_lbound], xdata[reflect_ubound-1], 100)
-			ax3.plot(reflect_peak_spline_domain, reflect_bspline(reflect_peak_spline_domain), color='orange')
+			# reflect_peak_spline_domain = np.linspace(xdata[reflect_lbound], xdata[reflect_ubound-1], 100)
+			# ax3.plot(reflect_peak_spline_domain, reflect_bspline(reflect_peak_spline_domain), color='orange')
 
-			prompt_peak_spline_domain = np.linspace(xdata[prompt_lbound], xdata[prompt_ubound-1], 100)
-			ax3.plot(prompt_peak_spline_domain, prompt_bspline(prompt_peak_spline_domain), color='green')
+			# prompt_peak_spline_domain = np.linspace(xdata[prompt_lbound], xdata[prompt_ubound-1], 100)
+			# ax3.plot(prompt_peak_spline_domain, prompt_bspline(prompt_peak_spline_domain), color='green')
 
-			ax3.axvline(prompt_intersect, color='red')
-			ax3.axvline(reflect_intersect, color='purple')
+			ax3.axvline(p_intersect, color='red')
+			ax3.axvline(r_intersect, color='purple')
 			ax3.legend()
 			ax3.set_xlabel('Sample time (ns)')
 			ax3.set_ylabel('ADC Count')
@@ -1421,7 +1369,7 @@ class Acdc:
 			plt.minorticks_on()
 			plt.show()
 
-		delta_t = prompt_intersect - reflect_intersect
+		delta_t = r_intersect - p_intersect
 
 		return delta_t
 
@@ -1632,11 +1580,10 @@ if __name__=='__main__':
 	
 	# bad_events = [53]
 
-	# bad spline cfd events 118
-	centers = test_acdc.find_event_centers(METHOD='spline-extrema', DEBUG_EVENTS=False, SAVE=True)
+	# bad spline cfd events 620, 745
+	centers = test_acdc.find_event_centers(METHOD='chi2-le', DEBUG_EVENTS=True, SAVE=False, events=[532])
 	
 	exit()
-
 
 	single_time = 500
 	single_channel = 15

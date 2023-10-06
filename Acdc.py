@@ -13,10 +13,7 @@ import uproot
 from pylandau import langau_pdf
 from time import process_time
 
-avg_fwhms = []
-
 # Some helper functions
-
 def convert_to_list(some_object):
 	"""Converts an object into a single-element list if the object is not already a list. Helps when a function works by going through elements of a list, but you want to pass a single element to that function.
 	Arguments:
@@ -52,14 +49,19 @@ def compute_sliding_function(xdata, ydata, lbound, rbound, stat_spline, func, sl
 										can be set to less than 1.
 	"""
 
-	xdata_sliding = np.copy(xdata)
+	# domain_for_plot = np.linspace(lbound, rbound, 2000)
+	# lbound_for_plot = lbound
+	# rbound_for_plot = rbound
+	# lbound = xdata[0]
+	# rbound = xdata[-1]
+
 	func_vals = []
 	lags = []
 	lag = 0
 	lag_factor = 25/256
 	while lag < 256:
 
-		xdata_sliding -= lag_factor*slide_increment*np.ones_like(xdata_sliding)
+		xdata_sliding = np.copy(xdata) - lag_factor*lag*np.ones_like(xdata)
 		indices_inbounds = np.linspace(0,255,256,dtype=int)[(xdata_sliding >= lbound) & (xdata_sliding <= rbound)]
 		if len(indices_inbounds) == 0:
 			lag += slide_increment
@@ -87,12 +89,126 @@ def compute_sliding_function(xdata, ydata, lbound, rbound, stat_spline, func, sl
 		func_vals.append(func(ydata_inbounds, ydata_stationary, xdata_shifted_inbounds))
 		lags.append(lag_factor*lag)
 
+		# if round(lag_factor*lag, 3) == 1.66:
+		# 	fig, ax = plt.subplots()
+		# 	ax.scatter(xdata, ydata, marker='.', label='Stationary')
+		# 	ax.plot(domain_for_plot, stat_spline(domain_for_plot), label='Stationary spline')
+		# 	ax.scatter(xdata_shifted_inbounds, ydata_inbounds, marker='.', label='Lagged')
+		# 	ax.scatter(xdata_shifted_inbounds, ydata_stationary, marker='.', color='red')
+		# 	for i, x_val in enumerate(xdata_shifted_inbounds):
+		# 		if ydata_inbounds[i] > ydata_stationary[i]:
+		# 			lower_val = ydata_stationary[i]
+		# 			higher_val = ydata_inbounds[i]
+		# 		else:
+		# 			lower_val = ydata_inbounds[i]
+		# 			higher_val = ydata_stationary[i]
+		# 		ax.axvline(x_val, ymin=(lower_val+1200)/1100, ymax=(higher_val+1200)/1100, color='gray')
+		# 	ax.axvline(lbound, color='green')
+		# 	ax.axvline(rbound, color='green')
+		# 	# ax.axvline(xdata_shifted_inbounds[3], color='C1')
+		# 	ax.text(2.663, -1180, f'Lag: {round(lag_factor*lag, 3)} ns', fontdict=dict(size=12))
+		# 	ax.set_xlim(lbound-0.2, rbound+0.2)
+		# 	# ax.set_xlim(1.5, 9)
+		# 	ax.set_ylim(-1200, -100)
+		# 	ax.legend(loc='lower right', framealpha=1)
+		# 	ax.set_xlabel('Sample time (ns)')
+		# 	ax.set_ylabel('ADC count')
+		# 	ax.xaxis.set_ticks_position('both')
+		# 	ax.yaxis.set_ticks_position('both')
+		# 	plt.minorticks_on()
+
+		# 	fig2, ax2 = plt.subplots()
+		# 	ax2.scatter(xdata_shifted_inbounds, (ydata_inbounds-ydata_stationary)**2, color='black', marker='.')
+		# 	for i in range(len(xdata_shifted_inbounds)-1):
+		# 		x_pols = [xdata_shifted_inbounds[i], xdata_shifted_inbounds[i], xdata_shifted_inbounds[i+1], xdata_shifted_inbounds[i+1]]
+		# 		y_pols = [0, ((ydata_inbounds-ydata_stationary)**2)[i], ((ydata_inbounds-ydata_stationary)**2)[i+1], 0]
+		# 		ax2.fill(x_pols, y_pols, color='C0', alpha=0.45, edgecolor='black')
+		# 	ax2.text(2.813,5.35e5, f'Lag: {round(lag_factor*lag, 3)} ns', fontdict=dict(size=12))
+		# 	ax2.text(2.813, 4.9e5, 'Integral value: {:.2e}'.format(func_vals[-1]), fontdict=dict(size=12))
+		# 	ax2.set_xlabel('Sample time (ns)')
+		# 	ax2.set_ylabel('Least squares values')
+		# 	ax2.xaxis.set_ticks_position('both')
+		# 	ax2.yaxis.set_ticks_position('both')
+		# 	plt.minorticks_on()
+
+		# 	plt.show()
+
 		lag += slide_increment
 
 	func_vals = np.array(func_vals)
 	lags = np.array(lags)
 
 	return lags, func_vals
+
+def find_leading_edge(xdata, ydata, display):
+
+	# Determines the indices of the peaks in the prompt and reflected pulses
+	height_cutoff = -0.6*ydata.max()
+	distance_between_peaks = 20		# in units of indices
+	peak_region_radius = 15			# in units of indices
+	peaks_rough = find_peaks(-1*ydata, height=height_cutoff, distance=distance_between_peaks)[0]
+	prompt_peak_index, reflect_peak_index = np.sort(peaks_rough[ydata[peaks_rough].argsort()[0:2]])
+
+	# Creates subregions of data around the reflect peak
+	reflect_lbound = reflect_peak_index - int((reflect_peak_index-prompt_peak_index)/2)-5 # lower bound is a bit left of the midway between peaks
+	reflect_ubound = reflect_peak_index + 6
+	ydata_subrange = ydata[reflect_lbound:reflect_ubound]
+	subdomain = xdata[reflect_lbound:reflect_ubound]
+	peak_region_lower, peak_region_upper = xdata[reflect_peak_index-4], xdata[reflect_peak_index+4]
+
+	# Solves for the extrema of the reflect peak
+	spline_tuple = splrep(subdomain, ydata_subrange, k=3, s=10000)
+	reflect_bspline = BSpline(*spline_tuple)
+	reflect_dbspline = reflect_bspline.derivative()
+	reflect_dcubic_spline = CubicSpline(subdomain, reflect_dbspline(subdomain))
+	extrema = reflect_dcubic_spline.solve(0, extrapolate=False)
+	reflect_peak_max = reflect_bspline(extrema[(extrema > peak_region_lower) & (extrema < peak_region_upper)])	# finds the extrema that is near our original find_peaks value
+	reflect_peak_max = reflect_peak_max[0]
+	reflect_peak_min_val = reflect_bspline(extrema[0]) + 0.1*(reflect_peak_max - reflect_bspline(extrema[0]))
+
+	# repeating the spline for the prompt peak now
+	prompt_lbound = prompt_peak_index - 20
+	if prompt_lbound < 0:
+		prompt_lbound = 0
+	prompt_ubound = prompt_peak_index + 4
+	prompt_subrange = ydata[prompt_lbound:prompt_ubound]
+	prompt_subdomain = xdata[prompt_lbound:prompt_ubound]
+	prompt_tuple = splrep(prompt_subdomain, prompt_subrange, k=3, s=10000)
+	prompt_bspline = BSpline(*prompt_tuple)
+	prompt_cubic_spline = CubicSpline(prompt_subdomain, prompt_bspline(prompt_subdomain))
+	prompt_dbspline = prompt_bspline.derivative()
+	prompt_dcubic_spline = CubicSpline(prompt_subdomain, prompt_dbspline(prompt_subdomain))
+	prompt_extrema = prompt_dcubic_spline.solve(0)
+	peak_region_lower, peak_region_upper = xdata[prompt_peak_index-3], xdata[prompt_peak_index+3]
+	prompt_peak_max = prompt_bspline(prompt_extrema[(prompt_extrema > peak_region_lower) & (prompt_extrema < peak_region_upper)])
+	prompt_peak_max = prompt_peak_max[0]
+
+	# Computes the integral bounds
+	lbound = prompt_cubic_spline.solve(reflect_peak_min_val, extrapolate=False)[0]
+	rbound = prompt_cubic_spline.solve(0.9*prompt_peak_max, extrapolate=False)[0]
+
+	if display:
+		fig3, ax3 = plt.subplots()
+		ax3.scatter(xdata, ydata, marker='.', label='Raw data')
+
+		# reflect_peak_spline_domain = np.linspace(xdata[reflect_lbound], xdata[reflect_ubound-1], 100)
+		# ax3.plot(reflect_peak_spline_domain, reflect_bspline(reflect_peak_spline_domain), color='orange', label='Reflected Pulse Spline')
+
+		prompt_peak_spline_domain = np.linspace(xdata[prompt_lbound], xdata[prompt_ubound-1], 100)
+		ax3.plot(prompt_peak_spline_domain, prompt_bspline(prompt_peak_spline_domain), color='green')
+		# ax3.plot(2.22, reflect_peak_min_val, marker='o', color='red', label='intersection')
+
+		# ax3.axhline(reflect_peak_min_val, color='magenta', label=f'{round(100*reflect_peak_min_val/reflect_peak_max, 2)}% of reflect peak max')
+		ax3.axvline(lbound, color='red', label=f'Lower bound ({round(100*reflect_peak_min_val/prompt_peak_max, 2)}% of \nprompt peak max)')
+		ax3.axvline(rbound, color='purple', label='Upper bound (90% of \nprompt peak max)')
+		ax3.legend(loc='lower right')
+		ax3.set_xlabel('Sample time (ns)')
+		ax3.set_ylabel('ADC Count')
+		ax3.set_title('Reflection-dependent Leading Edge Bounds')
+		ax3.set_xlim(1.6, 9.1)
+		plt.show()
+
+	return lbound, rbound, prompt_cubic_spline
 
 #This class represents the ACDC boards, and thus
 #in proxy an LAPPD - as in the LAPPD TOF system we plan
@@ -312,22 +428,22 @@ class Acdc:
 
 		time_offsets = np.reshape(in_file["config_tree"]["time_offsets"].array(library="np"), (30,256))
 
-		for thing in time_offsets:
-			for value in thing:
-				if value == 1e-10:
-					print(value)
-			print(thing)
+		# for thing in time_offsets:
+		# 	for value in thing:
+		# 		if value == 1e-10:
+		# 			print(value)
+		# 	print(thing)
 
-		fig, (ax, ax2) = plt.subplots(2)
-		channel = 11
-		time_offsets_subsample = time_offsets[channel,:]
-		samples = np.linspace(0,255,256,dtype=int)
-		ax.plot(samples,time_offsets_subsample)
-		ax.xaxis.set_ticks_position('both')
-		ax.yaxis.set_ticks_position('both')
-		ax2.hist(time_offsets_subsample, bins=25)
-		plt.minorticks_on()
-		plt.show()
+		# fig, (ax, ax2) = plt.subplots(2)
+		# channel = 11
+		# time_offsets_subsample = time_offsets[channel,:]
+		# samples = np.linspace(0,255,256,dtype=int)
+		# ax.plot(samples,time_offsets_subsample)
+		# ax.xaxis.set_ticks_position('both')
+		# ax.yaxis.set_ticks_position('both')
+		# ax2.hist(time_offsets_subsample, bins=25)
+		# plt.minorticks_on()
+		# plt.show()
 
 		# have to normalize since we get voltage as a value on [0,4096]
 		voltage_counts[:,:,:,0] = voltage_counts[:,:,:,0]*1.2/4096.
@@ -350,22 +466,32 @@ class Acdc:
 
 				self.cur_waveforms[:, ch, cap] = adjusted_values
 
-				# fig, ax = plt.subplots()
+				fig, ax = plt.subplots()
 
-				# ax.plot(voltage_count_sorted[:,1], voltage_count_sorted[:,0])
+				ax.plot(voltage_count_sorted[:,1], voltage_count_sorted[:,0])
 				
-				# plt.show()
-		
-		# fig, ax = plt.subplots()
+				plt.show()
 
-		# event, ch = 600, 15
-		# normalized_adc_data = self.cur_waveforms_raw[event, ch, :]
-		# normalized_adc_data = normalized_adc_data/normalized_adc_data.min()
+		# Have to rearrange channels
+		channels = np.array([5,4,3,2,1,0,11,10,9,8,7,6,17,16,15,14,13,12,23,22,21,20,19,18,29,28,27,26,25,24])
+		self.cur_waveforms = self.cur_waveforms[:,channels,:].copy()
+		self.cur_waveforms_raw = self.cur_waveforms_raw[:,channels,:].copy()
 
-		# normalized_voltage_data = self.cur_waveforms[event, ch, :]
-		# normalized_voltage_data = 
+		# Performs wrap-around correction using trigger location
+		for i, waveform in enumerate(self.cur_waveforms):
 
-		# plt.show()
+			trigger_low = (((self.cur_times_320[i]+2+2)%8)*32-16)%256
+
+			deltax = np.array([256*4/259]+[256/259]*255)
+			deltax = np.roll(deltax, -trigger_low)
+			x_data = np.cumsum(deltax)
+			self.sample_times.append(x_data*25./256)
+
+			# setting axis is necessary because waveform here is a 2D array
+			self.cur_waveforms[i,:,:] = np.roll(waveform.copy(), -trigger_low, axis=1)
+			self.cur_waveforms_raw[i,:,:] = np.roll(self.cur_waveforms_raw[i,:,:].copy(), -trigger_low, axis=1)
+
+		self.sample_times = np.array(self.sample_times)
 
 		return
 
@@ -529,7 +655,6 @@ class Acdc:
 
 		t1 = process_time()
 		centers = []
-		pos_saved = []
 		num_skipped_waveforms = 0
 		for i in events:
 
@@ -549,7 +674,7 @@ class Acdc:
 				if DEBUG_EVENTS:
 					self.plot_ped_corrected_pulse(i, channels=largest_ch)
 
-				############## IN PROGRESS MISTRIGGER CUT ##############
+				############## IN PROGRESS BAD DATA CUT ##############
 				l_pos_y_data_max = np.absolute(l_pos_y_data).max()
 				what_max_should_be = 200
 				if l_pos_y_data_max < what_max_should_be:
@@ -563,7 +688,7 @@ class Acdc:
 				first_val = np.absolute(l_pos_y_data[0])
 				# subset_avg = np.absolute(np.average(l_pos_y_data[205:215]))
 				# if first_val >= 2.25*subset_avg and first_val >= 0.10*l_pos_y_data_max:
-				print(first_val/l_pos_y_data_max)
+				# print(first_val/l_pos_y_data_max)
 				if first_val >= 0.15*l_pos_y_data_max:
 					print(f'Error with event {i} (likely has incorrect trigger)')
 					num_skipped_waveforms += 1
@@ -571,8 +696,8 @@ class Acdc:
 						raise
 					else:
 						continue
-				########################################################
-				
+				######################################################
+
 				DIAGNOSTIC_DATA = False
 
 				if 'langaus' in METHOD.lower():
@@ -583,8 +708,16 @@ class Acdc:
 					else:
 						METHOD = 'langaus_mpv'
 						l_pos = self.find_l_pos_langaus(l_pos_x_data, l_pos_y_data, display=DEBUG_EVENTS)
+				elif 'chi2' in METHOD.lower():
+					l_pos = self.find_l_pos_chi_squared(l_pos_x_data, l_pos_y_data, display=DEBUG_EVENTS)
+				elif 'auto' in METHOD.lower():
+					l_pos = self.find_l_pos_autocor_full(l_pos_x_data, l_pos_y_data, display=DEBUG_EVENTS)
+				elif 'spline' in METHOD.lower():
+					if 'cfd' in METHOD.lower():
+						l_pos = self.find_l_pos_spline_cfd(l_pos_x_data, l_pos_y_data, display=DEBUG_EVENTS)
+					else:
+						l_pos = self.find_l_pos_spline_extrema(l_pos_x_data, l_pos_y_data, display=DEBUG_EVENTS)
 				# l_pos_autocor_le = self.find_l_pos_autocor_le_subset(l_pos_x_data, l_pos_y_data, display=DEBUG_EVENTS, diagnostic=DIAGNOSTIC_DATA)
-				# l_pos_autocor_full = self.find_l_pos_autocor_full(l_pos_x_data, l_pos_y_data, display=DEBUG_EVENTS, diagnostic=DIAGNOSTIC_DATA)
 				# l_pos = self.find_l_pos_cfd(l_pos_y_data)
 				# l_pos_spline = self.find_l_pos_spline(l_pos_x_data, l_pos_y_data, display=DEBUG_EVENTS)
 				# l_pos_chi_squared = self.find_l_pos_chi_squared(l_pos_x_data, l_pos_y_data, display=DEBUG_EVENTS)
@@ -654,7 +787,7 @@ class Acdc:
 				
 		return correct_ch, bad_channels
 	
-	def find_l_pos_autocor_full(self, xdata, ydata, display=False, diagnostic=False):
+	def find_l_pos_autocor_full(self, xdata, ydata, display=False):
 		"""xxx fill in description
 		
 		"""
@@ -676,12 +809,16 @@ class Acdc:
 		peak_region_radius = 12*(25/256)			# in units of ns
 
 		integral_peaks_rough_indices = find_peaks(autocor_vals, height=height_cutoff, distance=distance_between_peaks)[0]
+
+		# Makes a cut so no "peaks" are found around delay of 0 ns
+		close_to_zero_cut = autocor_vals[integral_peaks_rough_indices] < autocor_vals[0]
+		integral_peaks_rough_indices = integral_peaks_rough_indices[close_to_zero_cut]
+
 		integral_peaks_rough_times = lags[integral_peaks_rough_indices]
 
-		extremas = []
-		splines = []
-		domains = []
-		for integral_peak_rough in integral_peaks_rough_times:
+		if len(integral_peaks_rough_indices == 1):
+
+			integral_peak_rough = integral_peaks_rough_times[0]
 
 			integral_peak_region_cut = (lags > (integral_peak_rough-peak_region_radius)) & (lags < (integral_peak_rough+peak_region_radius))
 
@@ -704,32 +841,61 @@ class Acdc:
 			extrema = extrema[(extrema > (integral_peak_rough-peak_region_radius+3*(25/256))) & (extrema < (integral_peak_rough+peak_region_radius-3*(25/256)))]
 
 			if len(extrema) > 0:
-				extrema = extrema[data_bspline(extrema).argsort()][-1]
+				extremum = extrema[data_bspline(extrema).argsort()][-1]
 			else:
-				extrema = integral_peak_rough
+				extremum = integral_peak_rough
 			
-			extremas.append(extrema)
-			splines.append(data_bspline)
-			domains.append(peak_region_domain)
+		elif len(integral_peaks_rough_indices) == 0:
+			autocor_tuple = splrep(lags, autocor_vals, k=3, s=10000)
+			autocor_bspline = BSpline(*autocor_tuple, extrapolate=False)
+			dautocor_bspline = autocor_bspline.derivative()
+			dautocor_vals = dautocor_bspline(lags)
+			dautocor_absmax = np.absolute(np.amin(dautocor_vals))
+			dautocor_peak_indices = find_peaks(dautocor_vals+dautocor_absmax, height=.7*dautocor_absmax, distance=6)[0]
+			dautocor_peak_index = dautocor_peak_indices[0]
+			dautocor_peak_time = lags[dautocor_peak_index]
 
-		extremas = np.array(extremas)
+			peak_region_cut = (lags > (dautocor_peak_time-peak_region_radius)) & (lags < (dautocor_peak_time+peak_region_radius))
+			lags_cut = lags[peak_region_cut]
+			dautocor_vals_cut = dautocor_vals[peak_region_cut]
 
-		if len(extremas) > 1:
-			print('Uh oh larger than 1!')
+			dautocor_tuple = splrep(lags_cut, dautocor_vals_cut)
+			dautocor_bspline = BSpline(*dautocor_tuple, extrapolate=False)
+			ddautocor_bspline = dautocor_bspline.derivative()
+
+			peak_region_domain_lower = lags_cut[0]
+			if peak_region_domain_lower < 0:
+				peak_region_domain_lower = 0
+
+			peak_region_domain = np.linspace(peak_region_domain_lower, lags_cut[-1], 300)
+			ddautocor_cubicspline = CubicSpline(peak_region_domain, ddautocor_bspline(peak_region_domain), extrapolate=False)
+			new_extremas = ddautocor_cubicspline.solve(0)
+			closest_to_zero_index = np.absolute(ddautocor_bspline(new_extremas)).argsort()[0]
+			extremum = new_extremas[closest_to_zero_index]
+		else:
+			print('More than 1 extrema')
 			raise
 
+
 		if display:
-			fig2, ax2 = plt.subplots()
-			ax2.scatter(lags, autocor_vals, label='Discrete Autocorrelation', marker='.')
-			ax2.axvline(extremas[0], color='orange', label=f'Peak 1 (lag={round(extremas[0], 2)} ns)')
-			ax2.plot(domains[0], splines[0](domains[0]), color='pink', label='Peak 1 Spline')
+			fig, ax = plt.subplots()
+			ax.scatter(lags, autocor_vals, label='Discrete Autocorrelation', marker='.')
+			ax.axvline(extremum, color='orange', label='Peak (lag={:.2f} ns)'.format(extremum))
+				# ax.plot(domains[0], splines[0](domains[0]), color='red', label='Peak Spline')
+			
+			# ax.plot(peak_region_domain, autocor_bspline(peak_region_domain))
+			# ax.plot(peak_region_domain, dautocor_bspline(peak_region_domain))
+			# ax.plot(np.linspace(lags[0], lags[-1], 4000), ddautocor_bspline(np.linspace(lags[0], lags[-1], 4000)))
 			# ax2.text(12.8,3.17e5, f'$\Delta t = {round(delta_t, 2)}$ ns', fontdict={'size': 16})
-			ax2.legend()
-			ax2.set_xlabel('Time delay (ns)')
-			ax2.set_ylabel('Autocorrelation value')
+			ax.legend()
+			ax.set_xlabel('Lag/delay time (ns)')
+			ax.set_ylabel('Autocorrelation value')
+			ax.xaxis.set_ticks_position('both')
+			ax.yaxis.set_ticks_position('both')
+			plt.minorticks_on()
 			plt.show()
-				
-		return extremas[0]
+						
+		return extremum
 
 	def find_l_pos_autocor_le_subset(self, xdata, ydata, display=False, diagnostic=False):
 		"""xxx fill in description
@@ -924,7 +1090,7 @@ class Acdc:
 					fwhm = above_hm_lags[-1] - above_hm_lags[0]
 					fwhms.append(fwhm)
 				avg_fwhm = 0.5*(fwhms[0] + fwhms[1])
-			avg_fwhms.append(avg_fwhm)
+			# avg_fwhms.append(avg_fwhm)
 			if display:
 				fig, ax = plt.subplots()
 				fig.set_size_inches([10.5, 8])
@@ -946,73 +1112,12 @@ class Acdc:
 		
 		"""
 
-		# Determines the indices of the peaks in the prompt and reflected pulses
-		height_cutoff = -0.6*ydata.max()
-		distance_between_peaks = 20		# in units of indices
-		peak_region_radius = 15			# in units of indices
-		peaks_rough = find_peaks(-1*ydata, height=height_cutoff, distance=distance_between_peaks)[0]
-		prompt_peak_index, reflect_peak_index = np.sort(peaks_rough[ydata[peaks_rough].argsort()[0:2]])
-	
-		# Creates subregions of data around the reflect peak
-		reflect_lbound = reflect_peak_index - int((reflect_peak_index-prompt_peak_index)/2)-5 # lower bound is a bit left of the midway between peaks
-		reflect_ubound = reflect_peak_index + 6
-		ydata_subrange = ydata[reflect_lbound:reflect_ubound]
-		subdomain = xdata[reflect_lbound:reflect_ubound]
-		peak_region_lower, peak_region_upper = xdata[reflect_peak_index-3], xdata[reflect_peak_index+3]
-
-		# Solves for the extrema of the reflect peak
-		spline_tuple = splrep(subdomain, ydata_subrange, k=3, s=10000)
-		bspline = BSpline(*spline_tuple)
-		dbspline = bspline.derivative()
-		reflect_cspline = CubicSpline(subdomain, bspline(subdomain))
-		dcubic_spline = CubicSpline(subdomain, dbspline(subdomain))
-		extrema = dcubic_spline.solve(0, extrapolate=False)
-		reflect_peak_max = reflect_cspline(extrema[(extrema > peak_region_lower) & (extrema < peak_region_upper)])	# finds the extrema that is near our original find_peaks value
-		reflect_peak_max = reflect_peak_max[0]
-		reflect_peak_min_val = reflect_cspline(extrema[0]) + 0.1*(reflect_peak_max - reflect_cspline(extrema[0]))
-
-		# repeating the spline for the prompt peak now
-		prompt_lbound = prompt_peak_index - 14
-		prompt_ubound = prompt_peak_index + 4
-		prompt_subrange = ydata[prompt_lbound:prompt_ubound]
-		prompt_subdomain = xdata[prompt_lbound:prompt_ubound]
-		prompt_tuple = splrep(prompt_subdomain, prompt_subrange, k=3, s=10000)
-		prompt_bspline = BSpline(*prompt_tuple)
-		prompt_dbspline = prompt_bspline.derivative()
-		prompt_cspline = CubicSpline(prompt_subdomain, prompt_bspline(prompt_subdomain))
-		prompt_dcspline = CubicSpline(prompt_subdomain, prompt_dbspline(prompt_subdomain))
-		prompt_extrema = prompt_dcspline.solve(0)
-		peak_region_lower, peak_region_upper = xdata[prompt_peak_index-3], xdata[prompt_peak_index+3]
-		prompt_peak_max = prompt_cspline(prompt_extrema[(prompt_extrema > peak_region_lower) & (prompt_extrema < peak_region_upper)])
-		prompt_peak_max = prompt_peak_max[0]
-
-		# Computes the integral bounds
-		integral_lower_bound = prompt_cspline.solve(reflect_peak_min_val, extrapolate=False)[0]
-		integral_upper_bound = prompt_cspline.solve(0.9*prompt_peak_max, extrapolate=False)[0]
-
-		if display:
-			fig3, ax3 = plt.subplots()
-			ax3.scatter(xdata, ydata, marker='.', label='Raw data')
-
-			reflect_peak_spline_domain = np.linspace(xdata[reflect_lbound], xdata[reflect_ubound-1], 100)
-			ax3.plot(reflect_peak_spline_domain, reflect_cspline(reflect_peak_spline_domain), color='orange')
-
-			prompt_peak_spline_domain = np.linspace(xdata[prompt_lbound], xdata[prompt_ubound-1], 100)
-			ax3.plot(prompt_peak_spline_domain, prompt_cspline(prompt_peak_spline_domain), color='green')
-
-			ax3.axhline(reflect_peak_min_val, color='pink', label=f'{round(100*reflect_peak_min_val/reflect_peak_max, 2)}% of reflected peak max')
-			ax3.axvline(integral_lower_bound, color='red', label=f'Lower bound ({round(100*reflect_peak_min_val/prompt_peak_max, 2)}% of \nprompt peak max)')
-			ax3.axvline(integral_upper_bound, color='purple', label='Upper bound (90% of \nprompt peak max)')
-			ax3.legend()
-			ax3.set_xlabel('Sample')
-			ax3.set_ylabel('ADC Count')
-			ax3.set_title('Integration bounds for the autocorrelation function')
-			plt.show()
+		lower_bound, upper_bound, prompt_bspline = find_leading_edge(xdata, ydata, display=display)
 
 		def chi2_func(stat_ydata, slid_ydata, xdata_slid):
 			return trapezoid((slid_ydata - stat_ydata)*(slid_ydata - stat_ydata), xdata_slid)
 		
-		lags, chi2_vals = compute_sliding_function(xdata, ydata, integral_lower_bound, integral_upper_bound, prompt_bspline, chi2_func)
+		lags, chi2_vals = compute_sliding_function(xdata, ydata, lower_bound, upper_bound, prompt_bspline, chi2_func)
 
 		height_cutoff = -0.45*chi2_vals.max()
 		distance_between_peaks = 10				# in units of indices
@@ -1055,14 +1160,17 @@ class Acdc:
 		delta_t = extrema
 
 		if display:
-			fig2, ax2 = plt.subplots()
-			ax2.scatter(lags, chi2_vals, label='Chi-squared', marker='.')
-			ax2.axvline(extrema, color='orange', label=f'Peak')
-			ax2.plot(peak_region_domain, data_bspline(peak_region_domain), color='red', label='Peak Spline')
-			ax2.text(8.2, 2e5, f'$\Delta t = {round(delta_t, 2)}$ ns', fontdict={'size': 16})
-			ax2.legend()
-			ax2.set_xlabel('Time delay (ns)')
-			ax2.set_ylabel('Chi-squared value')
+			fig, ax = plt.subplots()
+			ax.scatter(lags, chi2_vals, label='Least squares', marker='.')
+			ax.axvline(extrema, color='orange', label=f'Peak')
+			ax.plot(peak_region_domain, data_bspline(peak_region_domain), color='red', label='Peak Spline')
+			ax.text(8.2, 1.35e5, '$\Delta t = {:.2f}$ ns'.format(delta_t), fontdict={'size': 16})
+			ax.legend()
+			ax.set_xlabel('Lag/delay time (ns)')
+			ax.set_ylabel('Least squares values')
+			ax.xaxis.set_ticks_position('both')
+			ax.yaxis.set_ticks_position('both')
+			plt.minorticks_on()
 			plt.show()
 
 		return delta_t
@@ -1102,7 +1210,7 @@ class Acdc:
 		else:
 			# Now doing CFD peaks
 			peaks = []
-			cfd_val = 0.1
+			cfd_val = 0.4
 
 			# Find minimum y-val of the prompt pulse's langaus fit
 			#	Lambda function defines the prompt pulse's langaus fit
@@ -1155,7 +1263,7 @@ class Acdc:
 
 		return peaks.max()-peaks.min()
 
-	def find_l_pos_spline(self, xdata, ydata, display=False):
+	def find_l_pos_spline_extrema(self, xdata, ydata, display=False):
 
 		# Determines the indices of the peaks in the prompt and reflected pulses
 		height_cutoff = -0.6*ydata.max()
@@ -1165,95 +1273,157 @@ class Acdc:
 		prompt_peak_index, reflect_peak_index = np.sort(peaks_rough[ydata[peaks_rough].argsort()[0:2]])
 	
 		# Creates subregions of data around the reflect peak
-		reflect_lbound = reflect_peak_index - int((reflect_peak_index-prompt_peak_index)/2)-5 # lower bound is a bit left of the midway between peaks
+		reflect_lbound = reflect_peak_index - int((reflect_peak_index-prompt_peak_index)/2) 
 		reflect_ubound = reflect_peak_index + 6
 		ydata_subrange = ydata[reflect_lbound:reflect_ubound]
 		subdomain = xdata[reflect_lbound:reflect_ubound]
-		peak_region_lower, peak_region_upper = xdata[reflect_peak_index-3], xdata[reflect_peak_index+3]
+		peak_region_lower, peak_region_upper = xdata[reflect_peak_index-4], xdata[reflect_peak_index+4]
 
 		# Solves for the extrema of the reflect peak
 		spline_tuple = splrep(subdomain, ydata_subrange, k=3, s=10000)
-		bspline = BSpline(*spline_tuple)
-		dbspline = bspline.derivative()
-		reflect_cspline = CubicSpline(subdomain, bspline(subdomain))
+		reflect_bspline = BSpline(*spline_tuple)
+		dbspline = reflect_bspline.derivative()
 		dcubic_spline = CubicSpline(subdomain, dbspline(subdomain))
 		extrema = dcubic_spline.solve(0, extrapolate=False)
+
+		# fig, ax = plt.subplots()
+		# ax.scatter(xdata, ydata)
+		# for extremum in extrema:
+		# 	ax.axvline(extremum)
+		# ax.axvline(xdata[reflect_peak_index], color='red')
+		# ax.plot(subdomain, bspline(subdomain))
+		# plt.show()
+
 		reflect_peak_max_time = extrema[(extrema > peak_region_lower) & (extrema < peak_region_upper)][0]
-		reflect_peak_max = reflect_cspline(reflect_peak_max_time)	# finds the extrema that is near our original find_peaks value
-		reflect_peak_min_val = reflect_cspline(extrema[0]) + 0.1*(reflect_peak_max - reflect_cspline(extrema[0]))
 
 		# repeating the spline for the prompt peak now
-		prompt_lbound = prompt_peak_index - 14
-		prompt_ubound = prompt_peak_index + 4
+		prompt_lbound = prompt_peak_index - 6
+		if prompt_lbound < 0:
+			prompt_lbound = 0
+		prompt_ubound = prompt_peak_index + 6
 		prompt_subrange = ydata[prompt_lbound:prompt_ubound]
 		prompt_subdomain = xdata[prompt_lbound:prompt_ubound]
 		prompt_tuple = splrep(prompt_subdomain, prompt_subrange, k=3, s=10000)
 		prompt_bspline = BSpline(*prompt_tuple)
 		prompt_dbspline = prompt_bspline.derivative()
-		prompt_cspline = CubicSpline(prompt_subdomain, prompt_bspline(prompt_subdomain))
 		prompt_dcspline = CubicSpline(prompt_subdomain, prompt_dbspline(prompt_subdomain))
 		prompt_extrema = prompt_dcspline.solve(0)
-		peak_region_lower, peak_region_upper = xdata[prompt_peak_index-3], xdata[prompt_peak_index+3]
+		peak_region_lower, peak_region_upper = xdata[prompt_peak_index-4], xdata[prompt_peak_index+4]
 		prompt_peak_max_time = prompt_extrema[(prompt_extrema > peak_region_lower) & (prompt_extrema < peak_region_upper)][0]
-		prompt_peak_max = prompt_cspline(prompt_peak_max_time)
-
-		fraction_of_peak = reflect_peak_min_val/reflect_peak_max + (0.9-reflect_peak_min_val/reflect_peak_max)/2
-
-		prompt_cfd_time = prompt_cspline.solve(fraction_of_peak*prompt_peak_max, extrapolate=False)[0]
-		reflect_cfd_time = reflect_cspline.solve(fraction_of_peak*reflect_peak_max, extrapolate=False)[0]
 
 		if display:
 			fig3, ax3 = plt.subplots()
 			ax3.scatter(xdata, ydata, marker='.', label='Raw data')
 
 			reflect_peak_spline_domain = np.linspace(xdata[reflect_lbound], xdata[reflect_ubound-1], 100)
-			ax3.plot(reflect_peak_spline_domain, reflect_cspline(reflect_peak_spline_domain), color='orange')
+			ax3.plot(reflect_peak_spline_domain, reflect_bspline(reflect_peak_spline_domain), color='orange')
 
 			prompt_peak_spline_domain = np.linspace(xdata[prompt_lbound], xdata[prompt_ubound-1], 100)
-			ax3.plot(prompt_peak_spline_domain, prompt_cspline(prompt_peak_spline_domain), color='green')
+			ax3.plot(prompt_peak_spline_domain, prompt_bspline(prompt_peak_spline_domain), color='green')
 
-			ax3.axhline(reflect_peak_min_val, color='pink', label=f'{round(100*reflect_peak_min_val/reflect_peak_max, 2)}% of reflected peak max')
-			ax3.axvline(prompt_cfd_time, color='red')
-			ax3.axvline(reflect_cfd_time, color='purple')
+			ax3.axvline(prompt_peak_max_time, color='red')
+			ax3.axvline(reflect_peak_max_time, color='purple')
 			ax3.legend()
-			ax3.set_xlabel('Sample')
+			ax3.set_xlabel('Sample time (ns)')
 			ax3.set_ylabel('ADC Count')
-			ax3.set_title('Integration bounds for the autocorrelation function')
+			ax3.xaxis.set_ticks_position('both')
+			ax3.yaxis.set_ticks_position('both')
+			plt.minorticks_on()
 			plt.show()
 
 		# delta_t = reflect_peak_max_time - prompt_peak_max_time
-		delta_t = reflect_cfd_time - prompt_cfd_time
+		delta_t = reflect_peak_max_time - prompt_peak_max_time
 
 		return delta_t
 
-	def find_l_pos_cfd(self, y_data):
+	def find_l_pos_spline_cfd(self, xdata, ydata, cfd_val=0.4, display=False):
 		"""xxx add description
 		
 		"""
 
-		x_data = np.linspace(0,255,256)		
+		# Determines the indices of the peaks in the prompt and reflected pulses
+		height_cutoff = -0.6*ydata.max()
+		distance_between_peaks = 20		# in units of indices
+		peak_region_radius = 15			# in units of indices
+		peaks_rough = find_peaks(-1*ydata, height=height_cutoff, distance=distance_between_peaks)[0]
+		prompt_peak_index, reflect_peak_index = np.sort(peaks_rough[ydata[peaks_rough].argsort()[0:2]])
+	
+		# Creates subregions of data around the reflect peak
+		reflect_lbound = reflect_peak_index - int((reflect_peak_index-prompt_peak_index)/2)+3 
+		reflect_ubound = reflect_peak_index + 6
+		ydata_subrange = ydata[reflect_lbound:reflect_ubound]
+		subdomain = xdata[reflect_lbound:reflect_ubound]
+		peak_region_lower, peak_region_upper = xdata[reflect_peak_index-4], xdata[reflect_peak_index+4]
 
-		shift = 7
+		# Solves for the extrema of the reflect peak
+		spline_tuple = splrep(subdomain, ydata_subrange, k=3, s=10000)
+		reflect_bspline = BSpline(*spline_tuple)
+		dbspline = reflect_bspline.derivative()
+		reflect_cubicspline = CubicSpline(subdomain, reflect_bspline(subdomain))
+		dcubic_spline = CubicSpline(subdomain, dbspline(subdomain))
+		extrema = dcubic_spline.solve(0, extrapolate=False)
 
-		y_data_shift = np.roll(y_data, shift)
-		y_data_shift[0:shift] = np.zeros(shift)
-
-		atten = 0.1
-		y_data = -1*atten*y_data
-
-		new_data = y_data + y_data_shift
-
+		reflect_peak_max_time = extrema[(extrema > peak_region_lower) & (extrema < peak_region_upper)][0]
+		reflect_peak_max = reflect_bspline(reflect_peak_max_time)
+		reflect_intersects = reflect_cubicspline.solve(cfd_val*reflect_peak_max, extrapolate=False)
+		reflect_intersects = reflect_intersects[reflect_intersects < reflect_peak_max_time]
+		print(reflect_intersects)
 		fig, ax = plt.subplots()
-
-		ax.plot(x_data, y_data, label='Atten. inv.')
-		ax.plot(x_data, y_data_shift, label='Delayed')
-		ax.plot(x_data, new_data, label='Sum')
-
-		ax.legend()
-
+		ax.plot(subdomain, reflect_bspline(subdomain))
+		for val in reflect_intersects:
+			ax.axvline(val)
 		plt.show()
+		if len(reflect_intersects) != 1:
+			print('Reflect intersects length != 1')
+			raise
+		reflect_intersect = reflect_intersects[0]
 
-		return
+		# repeating the spline for the prompt peak now
+		prompt_lbound = prompt_peak_index - 14
+		if prompt_lbound < 0:
+			prompt_lbound = 0
+		prompt_ubound = prompt_peak_index + 6
+		prompt_subrange = ydata[prompt_lbound:prompt_ubound]
+		prompt_subdomain = xdata[prompt_lbound:prompt_ubound]
+		prompt_tuple = splrep(prompt_subdomain, prompt_subrange, k=3, s=10000)
+		prompt_bspline = BSpline(*prompt_tuple)
+		prompt_dbspline = prompt_bspline.derivative()
+		prompt_cubicspline = CubicSpline(prompt_subdomain, prompt_bspline(prompt_subdomain))
+		prompt_dcspline = CubicSpline(prompt_subdomain, prompt_dbspline(prompt_subdomain))
+		prompt_extrema = prompt_dcspline.solve(0)
+		peak_region_lower, peak_region_upper = xdata[prompt_peak_index-4], xdata[prompt_peak_index+4]
+		prompt_peak_max_time = prompt_extrema[(prompt_extrema > peak_region_lower) & (prompt_extrema < peak_region_upper)][0]
+		prompt_peak_max = prompt_bspline(prompt_peak_max_time)
+		prompt_intersects = prompt_cubicspline.solve(cfd_val*prompt_peak_max, extrapolate=False)
+		prompt_intersects = prompt_intersects[prompt_intersects < prompt_peak_max_time]
+		if len(prompt_intersects) != 1:
+			print('Prompt intersects length != 1')
+			raise
+		prompt_intersect = prompt_intersects[0]
+
+		if display:
+			fig3, ax3 = plt.subplots()
+			ax3.scatter(xdata, ydata, marker='.', label='Raw data')
+
+			reflect_peak_spline_domain = np.linspace(xdata[reflect_lbound], xdata[reflect_ubound-1], 100)
+			ax3.plot(reflect_peak_spline_domain, reflect_bspline(reflect_peak_spline_domain), color='orange')
+
+			prompt_peak_spline_domain = np.linspace(xdata[prompt_lbound], xdata[prompt_ubound-1], 100)
+			ax3.plot(prompt_peak_spline_domain, prompt_bspline(prompt_peak_spline_domain), color='green')
+
+			ax3.axvline(prompt_intersect, color='red')
+			ax3.axvline(reflect_intersect, color='purple')
+			ax3.legend()
+			ax3.set_xlabel('Sample time (ns)')
+			ax3.set_ylabel('ADC Count')
+			ax3.xaxis.set_ticks_position('both')
+			ax3.yaxis.set_ticks_position('both')
+			plt.minorticks_on()
+			plt.show()
+
+		delta_t = prompt_intersect - reflect_intersect
+
+		return delta_t
 
 	def find_t_pos_simple(self, waveform):
 		return self.largest_signal_ch(waveform)
@@ -1433,8 +1603,9 @@ if __name__=='__main__':
 		'pedestal_counts': None,
 		'pedestal_voltage': None,
 		'voltage_count_curves': None,
-		'calib_data_file_path': r'/home/cameronpoe/Desktop/lappd_tof_container/LAPPD_TOF_Analysis/new_new_test.root'
+		'calib_data_file_path': r'testData/acdc_vcc_calibration_data/133741.root'
 	}
+
 
 	# data_path = r'/home/cameronpoe/Desktop/lappd_tof_container/testData/old_data/Raw_testData_20230615_170611_b0.txt'
 	data_path = r'/home/cameronpoe/Desktop/lappd_tof_container/testData/Raw_testData_ACC1_20230714_094508_b0.txt'
@@ -1450,15 +1621,19 @@ if __name__=='__main__':
 	test_acdc.load_data_npz(r'testData/processed_data/current_working_data.npz')
 	# test_acdc.hist_single_cap_counts_vs_ped(10, 22)
 
-	# test_acdc.plot_ped_corrected_pulse(154)
+	# test_acdc.plot_ped_corrected_pulse(629)
 
 	# test_acdc.plot_raw_lappd(350)
 
-	event_subset = np.linspace(500, 3000, 2501, dtype=int)
+	# event_subset = np.linspace(0, 1250, 1251, dtype=int)
 	# bad_events = [554, 592, 593, 594, 632, 636, 709, 783, 854, 878, 887, 923, 962, 1033, 1047, 1099, 1139, 1180, 1240]
 	# bad_events = [616, 714, 1074, 1162, 1174]
 	# bad_events = [783]
-	centers = test_acdc.find_event_centers(METHOD='langaus_both', DEBUG_EVENTS=True, events=560)
+	
+	# bad_events = [53]
+
+	# bad spline cfd events 118
+	centers = test_acdc.find_event_centers(METHOD='spline-extrema', DEBUG_EVENTS=False, SAVE=True)
 	
 	exit()
 

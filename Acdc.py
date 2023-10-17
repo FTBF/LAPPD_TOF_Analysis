@@ -35,7 +35,7 @@ def find_extrema_spline(xdata, ydata):
 
 	return extrema, bspline
 
-def compute_sliding_function(xdata, ydata, lbound, rbound, stat_spline, func, slide_increment=1):
+def compute_sliding_function(xdata, ydata, lbound, rbound, stat_spline, func, slide_increment=1, FAST=False):
 	"""Handles the sliding/computing part of finding the autocorrelation function or lag-based chi-squared.
 		(ndarray)	xdata:				xdata of the waveform, i.e. the sample times
 		(ndarray)	ydata				ydata of the waveform, i.e. the voltages
@@ -49,17 +49,23 @@ def compute_sliding_function(xdata, ydata, lbound, rbound, stat_spline, func, sl
 										can be set to less than 1.
 	"""
 
-	# domain_for_plot = np.linspace(lbound, rbound, 2000)
-	# lbound_for_plot = lbound
-	# rbound_for_plot = rbound
-	# lbound = xdata[0]
-	# rbound = xdata[-1]
+	if FAST:
+		abs_ydata = np.absolute(ydata)
+		ydata_max = np.amax(abs_ydata)
+		indices, _ = find_peaks(abs_ydata, height=0.6*ydata_max, distance=5)
+		limit = indices[-1] - indices[0]
+		if limit == 0:
+			limit = 256
+		else:
+			limit += 15
+	else:
+		limit = 256
 
 	func_vals = []
 	lags = []
 	lag = 0
 	lag_factor = 25/256
-	while lag < 256:
+	while lag < limit:
 
 		xdata_sliding = np.copy(xdata) - lag_factor*lag*np.ones_like(xdata)
 		indices_inbounds = np.linspace(0,255,256,dtype=int)[(xdata_sliding >= lbound) & (xdata_sliding <= rbound)]
@@ -157,7 +163,8 @@ def find_leading_edge(xdata, ydata, display, SPLINE_CFD=False):
 	peak_region_lower, peak_region_upper = xdata[reflect_peak_index-4], xdata[reflect_peak_index+4]
 
 	# Solves for the extrema of the reflect peak
-	spline_tuple = splrep(reflect_subdomain, ydata_subrange, k=3, s=10000)
+	# spline_tuple = splrep(reflect_subdomain, ydata_subrange, k=3, s=10000)
+	spline_tuple = splrep(reflect_subdomain, ydata_subrange, k=3)
 	reflect_bspline = BSpline(*spline_tuple)
 	reflect_dbspline = reflect_bspline.derivative()
 	reflect_dcubic_spline = CubicSpline(reflect_subdomain, reflect_dbspline(reflect_subdomain))
@@ -173,7 +180,8 @@ def find_leading_edge(xdata, ydata, display, SPLINE_CFD=False):
 	prompt_ubound = prompt_peak_index + 4
 	prompt_subrange = ydata[prompt_lbound:prompt_ubound]
 	prompt_subdomain = xdata[prompt_lbound:prompt_ubound]
-	prompt_tuple = splrep(prompt_subdomain, prompt_subrange, k=3, s=10000)
+	# prompt_tuple = splrep(prompt_subdomain, prompt_subrange, k=3, s=10000)
+	prompt_tuple = splrep(prompt_subdomain, prompt_subrange, k=3)
 	prompt_bspline = BSpline(*prompt_tuple)
 	prompt_cubic_spline = CubicSpline(prompt_subdomain, prompt_bspline(prompt_subdomain))
 	prompt_dbspline = prompt_bspline.derivative()
@@ -706,20 +714,26 @@ class Acdc:
 
 				DIAGNOSTIC_DATA = False
 
-				if 'langaus' in METHOD.lower():
-					if 'cfd' in METHOD.lower():
+				lower_method = METHOD.lower()
+				if 'langaus' in lower_method:
+					if 'cfd' in lower_method:
 						l_pos = self.find_l_pos_langaus(l_pos_x_data, l_pos_y_data, METHOD='cfd', display=DEBUG_EVENTS)
-					elif 'both' in METHOD.lower():
+					elif 'both' in lower_method:
 						l_pos = self.find_l_pos_langaus(l_pos_x_data, l_pos_y_data, METHOD='both', display=DEBUG_EVENTS)
 					else:
 						METHOD = 'langaus_mpv'
 						l_pos = self.find_l_pos_langaus(l_pos_x_data, l_pos_y_data, display=DEBUG_EVENTS)
-				elif 'chi2' in METHOD.lower():
+				elif 'chi2' in lower_method:
 					l_pos = self.find_l_pos_chi_squared(l_pos_x_data, l_pos_y_data, display=DEBUG_EVENTS)
-				elif 'auto' in METHOD.lower():
+				elif 'least-squares' in lower_method:
+					if 'fast' in lower_method:
+						l_pos = self.find_l_pos_least_squares_fast(l_pos_x_data, l_pos_y_data, display=DEBUG_EVENTS)
+					else:
+						self.find_l_pos_chi_squared(l_pos_x_data, l_pos_y_data, display=DEBUG_EVENTS)
+				elif 'auto' in lower_method:
 					l_pos = self.find_l_pos_autocor_full(l_pos_x_data, l_pos_y_data, display=DEBUG_EVENTS)
-				elif 'spline' in METHOD.lower():
-					if 'cfd' in METHOD.lower():
+				elif 'spline' in lower_method:
+					if 'cfd' in lower_method:
 						l_pos = self.find_l_pos_spline_cfd(l_pos_x_data, l_pos_y_data, display=DEBUG_EVENTS)
 					else:
 						l_pos = self.find_l_pos_spline_extrema(l_pos_x_data, l_pos_y_data, display=DEBUG_EVENTS)
@@ -1181,6 +1195,78 @@ class Acdc:
 
 		return delta_t
 
+	def find_l_pos_least_squares_fast(self, xdata, ydata, display=False):
+		"""xxx fill in description
+		
+		"""
+
+		lower_bound, upper_bound, prompt_bspline = find_leading_edge(xdata, ydata, display=display)
+
+		def chi2_func(stat_ydata, slid_ydata, xdata_slid):
+			return trapezoid((slid_ydata - stat_ydata)*(slid_ydata - stat_ydata), xdata_slid)
+		
+		def abs_diff_func(stat_ydata, slid_ydata, xdata_slid):
+			return trapezoid(np.abs(slid_ydata-stat_ydata), xdata_slid)
+		
+		lags, chi2_vals = compute_sliding_function(xdata, ydata, lower_bound, upper_bound, prompt_bspline, chi2_func, slide_increment=2, FAST=True)
+
+		height_cutoff = -0.45*chi2_vals.max()
+		distance_between_peaks = 10				# in units of indices
+		peak_region_radius = 5*(25/256)			# in units of ns
+
+		integral_peaks_rough_indices = find_peaks(-chi2_vals, height=height_cutoff, distance=distance_between_peaks)[0]
+		sorted_integral_peaks_rough_indices = integral_peaks_rough_indices[chi2_vals[integral_peaks_rough_indices].argsort()]
+		integral_peak_rough_index = sorted_integral_peaks_rough_indices[0]
+		if integral_peak_rough_index == 0:
+			integral_peak_rough_index = sorted_integral_peaks_rough_indices[1]
+
+		integral_peak_rough = lags[integral_peak_rough_index]
+
+		integral_peak_region_cut = (lags > (integral_peak_rough-peak_region_radius)) & (lags < (integral_peak_rough+peak_region_radius))
+
+		lags_cut = lags[integral_peak_region_cut]
+		integrals_cut = chi2_vals[integral_peak_region_cut]
+
+		spline_tuple = splrep(lags_cut, integrals_cut, k=3, s=10000)
+		spline_tuple = splrep(lags_cut, integrals_cut, k=3)
+		data_bspline = BSpline(*spline_tuple)
+		ddata_bspline = data_bspline.derivative()
+		
+		peak_region_domain_lower = integral_peak_rough-peak_region_radius
+		if peak_region_domain_lower < 0:
+			peak_region_domain_lower = 0
+
+		peak_region_domain = np.linspace(peak_region_domain_lower, integral_peak_rough+peak_region_radius, 100)
+		dcubic_spline = CubicSpline(peak_region_domain, ddata_bspline(peak_region_domain))
+
+		extrema = dcubic_spline.solve(0)
+
+		extrema = extrema[(extrema > (integral_peak_rough-peak_region_radius+3*(25/256))) & (extrema < (integral_peak_rough+peak_region_radius-3*(25/256)))]
+
+		if len(extrema) > 0:
+			extrema = extrema[data_bspline(extrema).argsort()][-1]
+		else:
+			extrema = integral_peak_rough
+		
+		# the second extrema for the chi-squared curve is by definition at t=0, so we don't have to subtract anything to get delta_t
+		delta_t = extrema
+
+		if display:
+			fig, ax = plt.subplots()
+			ax.scatter(lags, chi2_vals, label='Least squares', marker='.')
+			ax.axvline(extrema, color='orange', label=f'Peak')
+			ax.plot(peak_region_domain, data_bspline(peak_region_domain), color='red', label='Peak Spline')
+			ax.text(8.2, 1.35e5, '$\Delta t = {:.2f}$ ns'.format(delta_t), fontdict={'size': 16})
+			ax.legend()
+			ax.set_xlabel('Lag/delay time (ns)')
+			ax.set_ylabel('Least squares values')
+			ax.xaxis.set_ticks_position('both')
+			ax.yaxis.set_ticks_position('both')
+			plt.minorticks_on()
+			plt.show()
+
+		return delta_t
+
 	def find_l_pos_langaus(self, xdata, ydata, METHOD='mpv', display=False):
 		"""xxx
 			main point is does mpv, cfd, and both for METHOD (default is mpv)
@@ -1581,7 +1667,7 @@ if __name__=='__main__':
 	# bad_events = [53]
 
 	# bad spline cfd events 620, 745
-	centers = test_acdc.find_event_centers(METHOD='chi2-le', DEBUG_EVENTS=True, SAVE=False, events=[532])
+	centers = test_acdc.find_event_centers(METHOD='least-squares-fast4', DEBUG_EVENTS=False, SAVE=True)
 	
 	exit()
 

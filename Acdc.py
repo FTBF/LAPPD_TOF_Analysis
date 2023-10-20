@@ -1633,7 +1633,7 @@ if __name__=='__main__':
 		'vel': 0.18,			 # mm/ps, average (~500 MHz - 1GHz) propagation velocity of the strip 
 		'dt': 1.0/(40e6*256),	 # picoseconds, nominal sampling time interval, 1/(clock to PSEC4 x number of samples)
 		# 'pedestal_data_path': r'/home/cameronpoe/Desktop/lappd_tof_container/testData/old_data/Raw_testData_20230615_164912_b0.txt',
-		'pedestal_data_path': r'/home/cameronpoe/Desktop/lappd_tof_container/testData/ped_Raw_testData_ACC1_20230714_093238_b0.txt',
+		'pedestal_data_path': r'../data/Raw_testData_ACC1_20230714_093238_b0.txt',
 		'pedestal_counts': None,
 		'pedestal_voltage': None,
 		'voltage_count_curves': None,
@@ -1642,7 +1642,7 @@ if __name__=='__main__':
 
 
 	# data_path = r'/home/cameronpoe/Desktop/lappd_tof_container/testData/old_data/Raw_testData_20230615_170611_b0.txt'
-	data_path = r'/home/cameronpoe/Desktop/lappd_tof_container/testData/Raw_testData_ACC1_20230714_094508_b0.txt'
+	data_path = r'../data/Raw_testData_ACC1_20230714_094508_b0.txt'
 
 	test_acdc = Acdc(init_dict)
 
@@ -1652,7 +1652,7 @@ if __name__=='__main__':
 	# directory_to_save_to = r'/home/cameronpoe/Desktop/lappd_tof_container/testData/processed_data'
 	# test_acdc.save_data_npz(file_name_i_want_to_save_as, directory_path=directory_to_save_to)
 	
-	test_acdc.load_data_npz(r'testData/processed_data/current_working_data.npz')
+	test_acdc.load_data_npz(r'current_working_data.npz')
 	# test_acdc.hist_single_cap_counts_vs_ped(10, 22)
 
 	# test_acdc.plot_ped_corrected_pulse(629)

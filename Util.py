@@ -3,7 +3,7 @@ from textwrap import fill
 import numpy as np
 from datetime import datetime
 import yaml
-import bitstruct.c as bitstruct
+import bitstruct as bitstruct
 import scipy
 import scipy.optimize
 import scipy.interpolate
@@ -20,6 +20,7 @@ from datetime import date
 #3. Phase distribution between channels.
 OLD_FORMAT = False
 DEBUG = False
+VERBOSE = False
 class Util:
 	def __init__(self, board_config=None):
 		self.measurement_config = Util.load_config(board_config)
@@ -123,19 +124,29 @@ class Util:
 		output_file = uproot.recreate(self.measurement_config["calibration_file"])#Overwrite the existing file, if any.
 		top_level = {"voltage_count_curves":self.voltage_df, "time_offsets":self.time_df}
 		output_file["config_tree"] = top_level
+		print("Calibration file saved.")
 	
 	#Reads a series of raw data files and saves a voltage curve calibration file.
 	def create_voltage_curve(self):
 		voltage_curve = []
+		tmp_peak = np.zeros((30,256))
 		x_vals = [i for i in range(self.measurement_config["voltage_curve"]["start"], self.measurement_config["voltage_curve"]["end"], self.measurement_config["voltage_curve"]["step"])]
 		for i in x_vals:
 			pedData = Util.getDataRaw([self.measurement_config["voltage_curve"]["prefix"]+str(i)+self.measurement_config["voltage_curve"]["suffix"]])[2]
-			voltage_curve.append([np.full((30,256), i), pedData.mean(0)])
+			tmp_peak = np.maximum(tmp_peak, pedData.mean(0))#Force the curve to be monotonic.
+			voltage_curve.append([np.full((30,256), i), tmp_peak])
 			#voltage_curve.append([np.full((30,256), i), np.full((30,256), i)])
 			print(i)
 		#voltage_curve is a list of size (# of measurement points), each measurement point is a 2x30(ch)x256(# of capacitors) array of voltage values.
 		voltage_curve = np.array(voltage_curve, dtype=np.float64).transpose(2,3,0,1) #Transpose so that the index order matches with voltage_df.
 		self.voltage_df[:] = voltage_curve#Keep the address to the array the same so that TTree can read it.
+		if(VERBOSE):
+			for channel in [0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29]:
+				plt.plot(np.transpose(voltage_curve[channel, :,:,0]), np.transpose(voltage_curve[channel, :,:,1]))
+				plt.xlabel("reference voltage (V)")
+				plt.ylabel("measured ADC")
+				plt.show()
+
 		self.save()
 	#Deprecated
 	def find_trigger_pos2(self, sineData):
@@ -297,6 +308,7 @@ class Util:
 		return sineData, trigger_pos
 #Reads a raw data file and saves a timebase calibration file.
 	def create_timebase_weighted(self):
+		timebase = np.zeros((30, 256), dtype=np.float64)
 		for channel in self.measurement_config["timebase"]["channels"]:
 			sineData = Util.getDataRaw([self.measurement_config["timebase"]["prefix"]+str(channel)+self.measurement_config["timebase"]["suffix"]])[2]
 			sineData = self.linearize_voltage(sineData) - 1.2/4096*self.measurement_config["timebase"]["pedestal"]
@@ -304,7 +316,6 @@ class Util:
 			nevents = self.measurement_config["timebase"]["nevents"]
 			ydata = sineData
 			ydata2 = np.concatenate((ydata, ydata, ydata), axis=2)
-			timebase = np.zeros((30, 256), dtype=np.float64)
 			a_matrix = []
 			y_matrix = []
 			w_matrix = []
@@ -917,10 +928,8 @@ class Util:
 		try:
 			return f(val)
 		except(ValueError):
-			if val < 2000:
-				return 0
-			else:
-				return 3.3
+			return val/4096*1.2
+			
 	def linearize_voltage(self, sineData):
 		x_vals = [i for i in range(self.measurement_config["voltage_curve"]["start"], self.measurement_config["voltage_curve"]["end"], self.measurement_config["voltage_curve"]["step"])]
 		refVoltage = np.array([(float(i)/(2**12))*1.2 for i in x_vals])
@@ -931,7 +940,8 @@ class Util:
 			voltageLin.append([])
 			for i in range(0, 256):
 				meanList = Util.savitzky_golay(self.voltage_df[j, i, :, 1], 41, 2)
-				#meanList[meanList<0] = 0
+				meanList[meanList<0] = 0
+				meanList[255] = 1.2 #fix the last value so that interpolation doesn't go out of bounds
 				voltageLin[j].append(scipy.interpolate.interp1d(meanList, refVoltage))
 		#xv = np.array([acd for acd in range(4096)])
 		#yv = vlineraize_wrap(voltageLin[0][0], xv)
@@ -954,7 +964,8 @@ if __name__ == "__main__":
 		OLD_FORMAT = True
 	if 'D' in ut.measurement_config["tasks"]:
 		DEBUG = True
-	
+	if 'V' in ut.measurement_config["tasks"]:
+		VERBOSE = True
 	if 'r' in ut.measurement_config["tasks"]:
 		ut.raw_plot()
 	if 'p' in ut.measurement_config["tasks"]:

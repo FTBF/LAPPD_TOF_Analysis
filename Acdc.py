@@ -6,12 +6,18 @@ from matplotlib import pyplot as plt
 from matplotlib import colors
 import scipy
 from scipy.optimize import curve_fit, fsolve, fmin
-from scipy.interpolate import splrep, BSpline, CubicSpline
-from scipy.signal import find_peaks
+from scipy.interpolate import splrep, BSpline, CubicSpline, interp1d
+from scipy.signal import find_peaks, savgol_filter
 from scipy.integrate import trapezoid
 import uproot
 from pylandau import langau_pdf
 from time import process_time
+from multiprocessing import Pool
+import numba
+
+MAX_PROCESSES = 1
+CALIB_ADC = True
+CALIB_TIME_BASE = False
 
 # Some helper functions
 def convert_to_list(some_object):
@@ -152,7 +158,8 @@ def find_leading_edge(xdata, ydata, display, SPLINE_CFD=False):
 	height_cutoff = -0.6*ydata.max()
 	distance_between_peaks = 20		# in units of indices
 	peak_region_radius = 15			# in units of indices
-	peaks_rough = find_peaks(-1*ydata, height=height_cutoff, distance=distance_between_peaks)[0]
+	# removed -1*ydata for vcc calibrated stuff
+	peaks_rough = find_peaks(ydata, height=height_cutoff, distance=distance_between_peaks)[0]
 	prompt_peak_index, reflect_peak_index = np.sort(peaks_rough[ydata[peaks_rough].argsort()[0:2]])
 
 	# Creates subregions of data around the reflect peak
@@ -169,6 +176,15 @@ def find_leading_edge(xdata, ydata, display, SPLINE_CFD=False):
 	reflect_dbspline = reflect_bspline.derivative()
 	reflect_dcubic_spline = CubicSpline(reflect_subdomain, reflect_dbspline(reflect_subdomain))
 	extrema = reflect_dcubic_spline.solve(0, extrapolate=False)
+	fig, ax = plt.subplots()
+	ax.plot(reflect_subdomain, reflect_bspline(reflect_subdomain))
+	for thing in extrema:
+		ax.axvline(thing)
+	ax.axvline(peak_region_lower, label='lower', color='red')
+	ax.axvline(peak_region_upper, label='upper', color='purple')
+	ax.legend()
+	plt.show()
+	print(extrema)
 	reflect_peak_max = reflect_bspline(extrema[(extrema > peak_region_lower) & (extrema < peak_region_upper)])	# finds the extrema that is near our original find_peaks value
 	reflect_peak_max = reflect_peak_max[0]
 	reflect_peak_min_val = reflect_bspline(extrema[0]) + 0.1*(reflect_peak_max - reflect_bspline(extrema[0]))
@@ -190,6 +206,14 @@ def find_leading_edge(xdata, ydata, display, SPLINE_CFD=False):
 	peak_region_lower, peak_region_upper = xdata[prompt_peak_index-3], xdata[prompt_peak_index+3]
 	prompt_peak_max = prompt_bspline(prompt_extrema[(prompt_extrema > peak_region_lower) & (prompt_extrema < peak_region_upper)])
 	prompt_peak_max = prompt_peak_max[0]
+
+	fig, ax = plt.subplots()
+	ax.scatter(xdata, ydata)
+	ax.plot(prompt_subdomain, prompt_bspline(prompt_subdomain))
+	ax.axhline(reflect_peak_min_val, color='red', label='min')
+	ax.axhline(0.9*prompt_peak_max, color='purple', label='max')
+	ax.legend()
+	plt.show()
 
 	# Computes the integral bounds
 	lbound = prompt_cubic_spline.solve(reflect_peak_min_val, extrapolate=False)[0]
@@ -224,6 +248,28 @@ def find_leading_edge(xdata, ydata, display, SPLINE_CFD=False):
 	else:
 		return lbound, rbound, prompt_cubic_spline
 
+@numba.jit(nopython=True)
+def faster_npinterp(data_raw, voltage_counts):
+	data = np.zeros_like(data_raw, dtype=np.float64)
+	for ch in range(0, 30):
+		for cap in range(0, 256):
+			adjusted_values = np.interp(data_raw[:,ch,cap], voltage_counts[ch, cap, :,1], voltage_counts[ch, cap, :,0])
+			data[:, ch, cap] = adjusted_values
+
+	return data
+
+@numba.jit(nopython=True)
+def faster_splrep(data_raw, voltage_counts):
+	data = np.zeros_like(data_raw, dtype=np.float64)
+	for ch in range(0, 30):
+		for cap in range(0, 256):
+			t, c, k = splrep(voltage_counts[ch, cap, :, 1], voltage_counts[ch, cap, :, 0])
+			single_bspline = BSpline(t, c, k)
+			adjusted_values = single_bspline(data_raw[:, ch, cap])
+			data[:, ch, cap] = adjusted_values
+
+	return data
+
 #This class represents the ACDC boards, and thus
 #in proxy an LAPPD - as in the LAPPD TOF system we plan
 #to use one Acdc for each LAPPD, read out in single-ended
@@ -249,9 +295,17 @@ class Acdc:
 		self.station_id = init_data_dict['station_id']		# station position, e.g. '1'
 		self.lappd_id = init_data_dict['lappd_id']			# Incom manufacturing number, e.g. '125'
 		self.acdc_id = init_data_dict['acdc_id']			# ACDC number (see inventory), e.g. '46'
-		self.sync_ch = init_data_dict['sync_ch']			
-		self.strip_pos = init_data_dict['strip_pos']		# mm shape=(# channels,); local center positions of each strip relative to bottom of LAPPD
+		self.sync_ch = init_data_dict['sync_ch']
+
+		# strip_pos: mm, shape=(# channels,); local center positions of each strip relative to bottom of LAPPD
+		if init_data_dict['strip_pos'] is None:
+			mm_per_strip = 6.6
+			self.strip_pos = mm_per_strip*np.linspace(0,29,30)	
+		else:		
+			self.strip_pos = init_data_dict['strip_pos']	
+
 		self.len_cor = init_data_dict['len_cor']			# mm, shape=(# channels,); a correction on the length of the strip + PCB traces per strip
+		self.chan_rearrange = np.array([5,4,3,2,1,0,11,10,9,8,7,6,17,16,15,14,13,12,23,22,21,20,19,18,29,28,27,26,25,24])
 
 		# I am overriding this as self.sample_times, which I initialize to None. Will need to go back in and figure this stuff out when we know if the init_data_dict is even gonna have an option to sepcify the sample_times
 		self.times = init_data_dict['times']				# ps, xxx need better variable name and also better description imo; a list of timebase calibrated times
@@ -260,13 +314,14 @@ class Acdc:
 		self.wraparound = init_data_dict['wraparound']		# ps, shape=(# channels,);  a constant time associated with the delay for when the VCDL goes from the 255th cap to the 0th cap
 		self.vel = init_data_dict['vel']					# mm/ps; average (~500 MHz - 1GHz) propagation velocity of the strip
 		self.dt = init_data_dict['dt']						# ps; nominal sampling time interval, 1/(clock to PSEC4 x number of samples)
-		_, _, self.pedestal_data = self.import_raw_data(init_data_dict['pedestal_data_path'], is_pedestal_data=True)	# ADC count, shape=(# events, # channels, # capacitors)
-		self.pedestal_counts = init_data_dict['pedestal_counts']	# ADC count; a list of 256 integers, which corresponds to each capicitors of VCDL.
+		self.import_raw_data(init_data_dict['pedestal_data_path'], is_pedestal_data=True)	# ADC count, shape=(# events, # channels, # capacitors)
+		# self.pedestal_counts = init_data_dict['pedestal_counts']	# ADC count; a list of 256 integers, which corresponds to each capicitors of VCDL.
 		self.pedestal_voltage = init_data_dict['pedestal_voltage']
 		self.voltage_count_curves = init_data_dict['voltage_count_curves']
 		self.calib_data_file_path = init_data_dict['calib_data_file_path']
 
 		self.cur_times, self.cur_times_320, self.cur_waveforms_raw, self.cur_waveforms = None, None, None, None
+		
 		# Imports waveform data if a path was specified upon Acdc initialization
 		if raw_waveform_data_path_list is not None:
 
@@ -280,7 +335,7 @@ class Acdc:
 			# self.process_raw_data()
 
 		else:
-			print('Initializing ACDC object with no waveform data.')
+			print('Initializing ACDC object with no waveform data.\n')
 
 
 
@@ -315,7 +370,7 @@ class Acdc:
 		# commented below out - cameron
 		# self.load_calibration() #will load default values if no calibration file provided. clear indicates we want a fresh dataframe
 
-	def import_raw_data(self, raw_data_path_list, is_pedestal_data=False):
+	def import_raw_data(self, raw_data_path, is_pedestal_data=False):
 		"""Imports binary LAPPD data into ACDC object.
 		Arguments:
 			(Acdc) self;
@@ -338,174 +393,243 @@ class Acdc:
 
 		swapformat="8"*(NUM64BITWORDS)
 
-		# Converts raw_waveform_data_path_list to list if it was mistakenly passed as a string (common error
-		#	when working with single binary file).
-		raw_data_path_list = convert_to_list(raw_data_path_list)
+		# Status update about which data file we're importing
+		if is_pedestal_data:
+			print(f'Importing pedestal data from \"{raw_data_path}\"')
+		else:
+			print(f'Importing data from \"{raw_data_path}\"')
 
-		# Imports each raw data file in the list supplied
-		for raw_data_path in raw_data_path_list:
+		number_of_lines_read = 0
+		# Here it actually reads and imports the raw data file
+		with open(raw_data_path, "rb") as f:
 
-			# Status update about which data file we're importing
-			if is_pedestal_data:
-				print(f'Importing pedestal data from \"{raw_data_path}\"')
-			else:
-				print(f'Importing data from \"{raw_data_path}\"')
+			line = f.read((1+4+NUM64BITWORDS)*8)
 
-			number_of_lines_read = 0
-			# Here it actually reads and imports the raw data file
-			with open(raw_data_path, "rb") as f:
+			# This loop breaks when the line length is no longer what we expect it to be (i.e. (1+4+NUM64BITWORDS)*8), which indicates end of file or file is corrupted (missing portions)
+			while len(line) == (1+4+NUM64BITWORDS)*8:
 
-				line = f.read((1+4+NUM64BITWORDS)*8)
+				number_of_lines_read+=1
 
-				# This loop breaks when the line length is no longer what we expect it to be (i.e. (1+4+NUM64BITWORDS)*8), which indicates end of file or file is corrupted (missing portions)
-				while len(line) == (1+4+NUM64BITWORDS)*8:
+				# get 8 byte acc_header and 8 byte header data from first 16 bytes of data (using byteswap to handle converting endianness)
+				acc_header = format_accheader.unpack(bitstruct.byteswap("8", line[0*8:1*8]))
+				header = format_header.unpack(bitstruct.byteswap("8", line[1*8:2*8]))
 
-					number_of_lines_read+=1
-
-					# get 8 byte acc_header and 8 byte header data from first 16 bytes of data (using byteswap to handle converting endianness)
-					acc_header = format_accheader.unpack(bitstruct.byteswap("8", line[0*8:1*8]))
-					header = format_header.unpack(bitstruct.byteswap("8", line[1*8:2*8]))
-
-					if acc_header[0] != 0x123456789abcde or header[0] != 0xac9c:
-						#print("CORRUPT EVENT!!! ", lnum, "%x"%acc_header[0], "%x"%header[0])
-						line = f.read((1+4+NUM64BITWORDS)*8)
-						continue
-					times_320.extend(format_time.unpack(bitstruct.byteswap("8", line[2*8:3*8])))
-					times.extend(format_time.unpack(bitstruct.byteswap("8", line[3*8:4*8])))
-
-					# Gets to actual data and reads it.
-					data.extend(format.unpack(bitstruct.byteswap(swapformat, line[5*8:])))
-
-					# Continues the loop
+				if acc_header[0] != 0x123456789abcde or header[0] != 0xac9c:
+					#print("CORRUPT EVENT!!! ", lnum, "%x"%acc_header[0], "%x"%header[0])
 					line = f.read((1+4+NUM64BITWORDS)*8)
+					continue
+				times_320.extend(format_time.unpack(bitstruct.byteswap("8", line[2*8:3*8])))
+				times.extend(format_time.unpack(bitstruct.byteswap("8", line[3*8:4*8])))
+
+				# Gets to actual data and reads it.
+				data.extend(format.unpack(bitstruct.byteswap(swapformat, line[5*8:])))
+
+				# Continues the loop
+				line = f.read((1+4+NUM64BITWORDS)*8)
 
 		# Turns lists into np arrays and reshapes `data` since `data` is not 1D
 		times_320 = np.array(times_320)
 		times = np.array(times_320)
 		data = np.array(data).reshape([-1,30,256])
 
-		# Immediately overrides object's prior waveform data if it's not pedestal data being imported.
-		if not is_pedestal_data:
-			
-			# See __init__ function for description of the following variables.
-			self.cur_times_320, self.cur_times, self.cur_waveforms_raw = times_320, times, data
-
-			self.process_raw_data_via_pedestal()
-			# self.process_raw_data()
+		if is_pedestal_data:
+			# Averages pedestal_data over all the events
+			data = data[:,self.chan_rearrange,:]
+			self.pedestal_data = np.copy(data)
+			self.pedestal_counts = np.copy(self.pedestal_data.mean(0))
 
 		# Still returns relevant data
 		return times_320, times, data
-	
-	def process_raw_data_via_pedestal(self):
-		"""Cleans up raw waveform data. Current implementation simply subtracts off average pedestal ADC count of each capacitor in each channel. Future implementations will use voltage_count_curves and interpolation to correct ADC counts and convert to voltage.cw_low
-			(Acdc) self		
-		"""
 
-		# Averages pedestal_data over all the events
-		self.pedestal_counts = self.pedestal_data.mean(0)
+	def preprocess_data(self, times320, data_raw):
 
-		# Subtracts pedestal_counts from the waveform data for each event (subtracts by broadcasting the 2D pedestal_counts array to the 3D cur_waveforms_raw array)
-		self.cur_waveforms = self.cur_waveforms_raw - self.pedestal_counts
+		vccs = None
+		# First processes the data to either turn ADC counts into voltages or to keep ADC counts but apply pedestal correction
+		if CALIB_ADC:
+			# Imports voltage calib data and normalizes
+			in_file = uproot.open(self.calib_data_file_path)
+			voltage_counts = np.reshape(in_file["config_tree"]["voltage_count_curves"].array(library="np"), (30,256,256,2))
+			voltage_counts[:,:,:,0] = voltage_counts[:,:,:,0]*1.2/4096.
+
+			voltage_counts[:,:,:,1] = savgol_filter(voltage_counts[:,:,:,1], 41, 2, axis=2)
+			reorder = np.argsort(voltage_counts[:,:,:,1], axis=2)
+			voltage_counts = np.take_along_axis(voltage_counts, reorder[:,:,:,np.newaxis], axis=2)
+
+			# fig, ax = plt.subplots()
+			# ax.plot(voltage_counts[16,151,:,1], voltage_counts[16,151,:,0])
+			# # ax.scatter(voltage_counts[16,151,:,1], voltage_counts[16,151,:,0], marker='.')
+			# ax.set_xlabel('ADC count', fontdict=dict(size=14))
+			# ax.set_ylabel('Voltage (V)', fontdict=dict(size=14))
+			# ax.xaxis.set_ticks_position('both')
+			# ax.yaxis.set_ticks_position('both')
+			# plt.minorticks_on()
+			# plt.show()
+
+			t1 = process_time()
+			OPTION = 5
+			# ~3s for 10k events
+			if OPTION == 1:
+				data = np.zeros_like(data_raw, dtype=np.float64)
+				for ch in range(0, 30):
+					for cap in range(0, 256):
+						adjusted_values = np.interp(data_raw[:,ch,cap], voltage_counts[ch, cap, :,1], voltage_counts[ch, cap, :,0])
+						data[:, ch, cap] = adjusted_values
+				
+			# ~5.5s per 10k events
+			elif OPTION == 2:
+				data = faster_npinterp(data_raw, voltage_counts)
+
+			# ~4.8s for 10k events
+			elif OPTION == 3:
+				data = np.zeros_like(data_raw, dtype=np.float64)
+				vccs = [[None]*256]*30
+				for ch in range(0, 30):
+					for cap in range(0, 256):
+						t, c, k = splrep(voltage_counts[ch, cap, :, 1], voltage_counts[ch, cap, :, 0])
+						single_bspline = BSpline(t, c, k)
+						adjusted_values = single_bspline(data_raw[:, ch, cap])
+						data[:, ch, cap] = adjusted_values
+						vccs[ch][cap] = single_bspline
+						# if ch == 17 and cap == 58:
+						# 	fig, ax = plt.subplots()
+						# 	ax.scatter(voltage_counts[ch, cap, :, 1], voltage_counts[ch, cap,:,0])
+						# 	domain = np.linspace(voltage_counts[ch, cap, 0, 1], voltage_counts[ch, cap, -1, 1], 500)
+						# 	ax.plot(domain, single_bspline(domain), color='red')
+						# 	ax.set_xlabel('ADC count', fontdict=dict(size=14))
+						# 	ax.set_ylabel('Voltage (V)', fontdict=dict(size=14))
+						# 	ax.xaxis.set_ticks_position('both')
+						# 	ax.yaxis.set_ticks_position('both')
+						# 	plt.minorticks_on()
+						# 	plt.show()
+			
+			# Doesn't work (scipy functions not recognized by numba)
+			elif OPTION == 4:
+				data = faster_splrep(data_raw, voltage_counts)
+
+			# ~6x faster than option 1
+			elif OPTION == 5:
+				reorder = np.argsort(voltage_counts[:,:,:,0], axis=2)
+				voltage_counts = np.take_along_axis(voltage_counts, reorder[:,:,:,np.newaxis], axis=2)
+
+				# First finds the linear regression for ADC v. Voltage
+				subregion = np.linspace(40,216,177,dtype=int)
+				xvals = voltage_counts[0,0,subregion,0]
+				yvals = np.reshape(voltage_counts[:,:,subregion,1], (30*256,len(subregion))).T
+				A = np.vstack([xvals, np.ones(len(xvals))]).T
+				mbs = np.linalg.lstsq(A, yvals, rcond=None)[0].T.reshape(30,256,2)
+				
+				# Now we have to invert the slope/y-intercepts (mbs)
+				mbs[:,:,1] = -mbs[:,:,1]/mbs[:,:,0]
+				mbs[:,:,0] = 1/mbs[:,:,0]
+
+				vccs = mbs
+
+				# Now calibrate the data
+				data = vccs[:,:,0]*data_raw + vccs[:,:,1]
+
+				# fig, ax = plt.subplots()
+				# ax.scatter(voltage_counts[20,212,:,1], voltage_counts[20,212,:,0], marker='.')
+				# domain = np.linspace(voltage_counts[20,212,0,1], voltage_counts[20,212,-1,1], 500)
+				# ax.plot(domain, mbs[20,212,0]*domain+mbs[20,212,1], color='red')
+				# plt.show()
+			t2 = process_time()
+
+			print(t2-t1)
 		
-		# Have to rearrange channels
-		channels = np.array([5,4,3,2,1,0,11,10,9,8,7,6,17,16,15,14,13,12,23,22,21,20,19,18,29,28,27,26,25,24])
-		self.cur_waveforms = self.cur_waveforms[:,channels,:].copy()
-		self.cur_waveforms_raw = self.cur_waveforms_raw[:,channels,:].copy()
+		else:
+			# Rearranges channels based on how striplines are connected to the PSEC4 chips
+			data_raw = data_raw[:,self.chan_rearrange,:]
 
-		# Performs wrap-around correction using trigger location
-		for i, waveform in enumerate(self.cur_waveforms):
+			# Subtracts pedestal_counts from the waveform data for each event (subtracts by broadcasting the 2D pedestal_counts array to the 3D cur_waveforms_raw array)
+			data = data_raw - self.pedestal_counts
 
-			trigger_low = (((self.cur_times_320[i]+2+2)%8)*32-16)%256
+		t1 = process_time()
+		# ~0.05s for 10k events
+		ydata_v, opt_chs, bad_chs = self.v_data_opt_ch(data)
+		t2 = process_time()
 
-			deltax = np.array([256*4/259]+[256/259]*255)
-			deltax = np.roll(deltax, -trigger_low)
-			x_data = np.cumsum(deltax)
-			self.sample_times.append(x_data*25./256)
+		print(t2-t1)
 
-			# setting axis is necessary because waveform here is a 2D array
-			self.cur_waveforms[i,:,:] = np.roll(waveform.copy(), -trigger_low, axis=1)
-			self.cur_waveforms_raw[i,:,:] = np.roll(self.cur_waveforms_raw[i,:,:].copy(), -trigger_low, axis=1)
+		t1 = process_time()
+		if CALIB_TIME_BASE:
+			pass
 
-		self.sample_times = np.array(self.sample_times)
+		# ~0.17s for 10k events
+		else:
+			# Make fake time offsets 
+			xdata_h = np.full(256, 25.0/256) #+ 0.01*np.random.rand(256)
+			xdata_h[0] += 0.300
 
-		return
-	
-	def process_raw_data(self):
+			# Fancy bit stuff to get the lower bound of the octant where trigger happened
+			trigger_low = (((times320+2+2)%8)*32-16)%256
 
-		if self.calib_data_file_path is None:
-			return
-		
-		# imports the numpy array from the root file by traversing file tree, reading data as a np array, and reshaping to (#channels,
-		# 	#capacitors, #voltages, (voltage, adc))
-		in_file = uproot.open(self.calib_data_file_path)
-		voltage_counts = np.reshape(in_file["config_tree"]["voltage_count_curves"].array(library="np"), (30,256,256,2))
+			# Rearranges data so trigger is at the start
+			xdata_h = np.array([np.roll(np.copy(xdata_h), -trigger_low[i]) for i in range(trigger_low.shape[0])])
+			xdata_h = np.cumsum(xdata_h, axis=1)
+			subdata = np.take_along_axis(data, opt_chs[:,np.newaxis,np.newaxis], axis=1).reshape(xdata_h.shape[0], 256)
+			ydata_h = np.array([np.roll(np.copy(subdata[i,:]), -trigger_low[i]) for i in range(trigger_low.shape[0])])
+		t2 = process_time()
 
-		time_offsets = np.reshape(in_file["config_tree"]["time_offsets"].array(library="np"), (30,256))
+		print(t2-t1)
 
-		# for thing in time_offsets:
-		# 	for value in thing:
-		# 		if value == 1e-10:
-		# 			print(value)
-		# 	print(thing)
-
-		# fig, (ax, ax2) = plt.subplots(2)
-		# channel = 11
-		# time_offsets_subsample = time_offsets[channel,:]
-		# samples = np.linspace(0,255,256,dtype=int)
-		# ax.plot(samples,time_offsets_subsample)
-		# ax.xaxis.set_ticks_position('both')
-		# ax.yaxis.set_ticks_position('both')
-		# ax2.hist(time_offsets_subsample, bins=25)
-		# plt.minorticks_on()
+		# fig, ax = plt.subplots()
+		# ax.scatter(xdata_h[4983,:], data_raw[4983,opt_chs[4983],:], marker='.')
+		# ax.plot(xdata_h[4983,:], data_raw[4983,opt_chs[4983],:])
 		# plt.show()
 
-		# have to normalize since we get voltage as a value on [0,4096]
-		voltage_counts[:,:,:,0] = voltage_counts[:,:,:,0]*1.2/4096.
-		
-		self.cur_waveforms = np.zeros_like(self.cur_waveforms_raw, dtype=np.float64)
+		# fig, ax = plt.subplots()
+		# ax.scatter(xdata_h[4983,:], ydata_h[4983,:], marker='.')
+		# ax.plot(xdata_h[4983,:], ydata_h[4983,:])
+		# plt.show()
 
-		voltageLin = []
-		for ch in range(0, 30):
-			voltageLin.append([])
-			for cap in range(0, 256):
+		return ydata_v, xdata_h, ydata_h, vccs, opt_chs, bad_chs
+	
+	def v_data_opt_ch(self, data):
+		"""Small function to retrieve the channel to be used in to find the x-positions.
+		Arguments:
+			(Acdc) self
+			(np.array) waveform: a single event's waveform (2D array) from which the optimal channel will be found		
+		"""
 
-				single_voltage_counts = voltage_counts[ch, cap, :, :]
+		ratio_limit = 4
 
-				# for each channel and each capacitor, applies the Savitzky-Golay filter to ADC data to smooth it out, returning same data but adjusted with 
-				#	the smoothing applied
-				single_voltage_counts[:, 1] = scipy.signal.savgol_filter(single_voltage_counts[:, 1], 41, 2)
-				voltage_count_sorted = single_voltage_counts[single_voltage_counts[:, 1].argsort()]
+		# Finds optimal channels (1D array, length=# of events, best ch per event)
+		mindata = data.min(axis=2)
+		organized_chs = np.argsort(mindata, axis=1)
+		opt_chs = organized_chs[:,0]
 
-				adjusted_values = np.interp(self.cur_waveforms_raw[:,ch,cap], voltage_count_sorted[:,1], voltage_count_sorted[:,0])
+		# Now we need to account for cap misfires
+		cut1 = (opt_chs != 0) & (opt_chs != 29)
+		l_opt_chs, r_opt_chs = np.copy(opt_chs), np.copy(opt_chs)
+		l_opt_chs[cut1] = l_opt_chs[cut1] - 1
+		r_opt_chs[cut1] = r_opt_chs[cut1] + 1
 
-				self.cur_waveforms[:, ch, cap] = adjusted_values
+		mindata_opt = np.take_along_axis(mindata, opt_chs[:,np.newaxis], axis=1).flatten()
+		mindata_l_opt = np.take_along_axis(mindata, l_opt_chs[:,np.newaxis], axis=1).flatten()
+		mindata_r_opt = np.take_along_axis(mindata, r_opt_chs[:,np.newaxis], axis=1).flatten()
 
-				fig, ax = plt.subplots()
+		cut2 = mindata_opt != 0
 
-				ax.plot(voltage_count_sorted[:,1], voltage_count_sorted[:,0])
+		cut3 = (mindata_l_opt[cut2]/mindata_opt[cut2] < ratio_limit) | (mindata_r_opt[cut2]/mindata_opt[cut2] < ratio_limit)
+		bad_channels = np.copy(opt_chs)
+		opt_chs[cut2][cut3] = organized_chs[cut2][cut3][:,1]
 				
-				plt.show()
+		return mindata, opt_chs, bad_channels
 
-		# Have to rearrange channels
-		channels = np.array([5,4,3,2,1,0,11,10,9,8,7,6,17,16,15,14,13,12,23,22,21,20,19,18,29,28,27,26,25,24])
-		self.cur_waveforms = self.cur_waveforms[:,channels,:].copy()
-		self.cur_waveforms_raw = self.cur_waveforms_raw[:,channels,:].copy()
+	def process_single_file(self, file_name):
+		times320, times, data_raw = self.import_raw_data(file_name)
+		self.preprocess_data(times320, data_raw)
+		return
 
-		# Performs wrap-around correction using trigger location
-		for i, waveform in enumerate(self.cur_waveforms):
+	def process_files(self, file_list):
 
-			trigger_low = (((self.cur_times_320[i]+2+2)%8)*32-16)%256
-
-			deltax = np.array([256*4/259]+[256/259]*255)
-			deltax = np.roll(deltax, -trigger_low)
-			x_data = np.cumsum(deltax)
-			self.sample_times.append(x_data*25./256)
-
-			# setting axis is necessary because waveform here is a 2D array
-			self.cur_waveforms[i,:,:] = np.roll(waveform.copy(), -trigger_low, axis=1)
-			self.cur_waveforms_raw[i,:,:] = np.roll(self.cur_waveforms_raw[i,:,:].copy(), -trigger_low, axis=1)
-
-		self.sample_times = np.array(self.sample_times)
+		if MAX_PROCESSES != 1:
+			with Pool(MAX_PROCESSES) as p:
+				file_list = convert_to_list(file_list)
+				p.map(self.process_single_file, file_list)
+		else:
+			for file_name in file_list:
+				self.process_single_file(file_name)
 
 		return
 
@@ -613,6 +737,7 @@ class Acdc:
 
 		# Creates 1D array of x_data (all 256 capacitors) and computes 2D array (one axis channel #, other axis capacitor #) of
 		#	corrected and raw ADC data
+		print(self.cur_waveforms.shape)
 		y_data_list = self.cur_waveforms[event,channels,:].reshape(len(channels), -1)
 		y_data_raw_list = self.cur_waveforms_raw[event,channels,:].reshape(len(channels), -1)
 
@@ -621,18 +746,21 @@ class Acdc:
 
 		# Plots the raw waveform data
 		for channel, y_data_raw in enumerate(y_data_raw_list):
-			ax1.plot(self.sample_times[event], y_data_raw, label="Channel %i"%channel)
+			ax1.plot(np.linspace(0,255,256), y_data_raw, label="Channel %i"%channel)
+			# ax1.plot(np.linspace(0,255,256), y_data_raw, label="Channel %i"%channel)
 
 		# Plots the corrected waveform data
 		for channel, y_data in enumerate(y_data_list):
-			ax2.plot(self.sample_times[event], y_data, label='Channel %i'%channel)		
+			ax2.plot(self.sample_times[event, channel], y_data, label='Channel %i'%channel)	
+			# ax2.plot(np.linspace(0,255,256), y_data, label='Channel %i'%channel)		
 
+		print(self.sample_times[event, channel])
 		# Labels the plots, make them look pretty, and displays the plots
-		ax1.set_xlabel("Time sample (ns)")
+		ax1.set_xlabel("Sample number")
 		ax1.set_ylabel("ADC count (raw)")
 		ax1.tick_params(right=True, top=True)
 		ax2.set_xlabel("Time sample (ns)")
-		ax2.set_ylabel("ADC count (ped corrected)")
+		ax2.set_ylabel("Y-value (calibrated)")
 		ax2.tick_params(right=True, top=True)
 		
 		fig.tight_layout()
@@ -680,7 +808,8 @@ class Acdc:
 				waveform = np.copy(self.cur_waveforms[i])	
 				
 				l_pos_x_data = self.sample_times[i]
-				largest_ch, bad_channels = self.largest_signal_ch(waveform)
+				largest_ch, bad_channels = self.largest_signal_ch(waveform, vcc_calibrated=True)
+				
 				# largest_ch_OLD = self.largest_signal_ch_old(waveform)
 				# print(f'New largest ch: {largest_ch}\nOld largest ch: {largest_ch_OLD}')
 				l_pos_y_data = waveform[largest_ch]
@@ -689,27 +818,27 @@ class Acdc:
 					self.plot_ped_corrected_pulse(i, channels=largest_ch)
 
 				############## IN PROGRESS BAD DATA CUT ##############
-				l_pos_y_data_max = np.absolute(l_pos_y_data).max()
-				what_max_should_be = 200
-				if l_pos_y_data_max < what_max_should_be:
-					print(f'Error with event {i} (likely is just noise)')
-					num_skipped_waveforms += 1
-					if DEBUG_EVENTS:
-						raise
-					else:
-						continue
+				# l_pos_y_data_max = np.absolute(l_pos_y_data).max()
+				# what_max_should_be = 200
+				# if l_pos_y_data_max < what_max_should_be:
+				# 	print(f'Error with event {i} (likely is just noise)')
+				# 	num_skipped_waveforms += 1
+				# 	if DEBUG_EVENTS:
+				# 		raise
+				# 	else:
+				# 		continue
 
-				first_val = np.absolute(l_pos_y_data[0])
-				# subset_avg = np.absolute(np.average(l_pos_y_data[205:215]))
-				# if first_val >= 2.25*subset_avg and first_val >= 0.10*l_pos_y_data_max:
-				# print(first_val/l_pos_y_data_max)
-				if first_val >= 0.15*l_pos_y_data_max:
-					print(f'Error with event {i} (likely has incorrect trigger)')
-					num_skipped_waveforms += 1
-					if DEBUG_EVENTS:
-						raise
-					else:
-						continue
+				# first_val = np.absolute(l_pos_y_data[0])
+				# # subset_avg = np.absolute(np.average(l_pos_y_data[205:215]))
+				# # if first_val >= 2.25*subset_avg and first_val >= 0.10*l_pos_y_data_max:
+				# # print(first_val/l_pos_y_data_max)
+				# if first_val >= 0.15*l_pos_y_data_max:
+				# 	print(f'Error with event {i} (likely has incorrect trigger)')
+				# 	num_skipped_waveforms += 1
+				# 	if DEBUG_EVENTS:
+				# 		raise
+				# 	else:
+				# 		continue
 				######################################################
 
 				DIAGNOSTIC_DATA = False
@@ -775,37 +904,6 @@ class Acdc:
 			np.save('centers_' + METHOD, centers)
 
 		return centers
-	
-	def largest_signal_ch(self, waveform):
-		"""Small function to retrieve the channel to be used in the find_l_pos functions.
-		Arguments:
-			(Acdc) self
-			(np.array) waveform: a single event's waveform (2D array) from which the optimal channel will be found		
-		"""
-
-		ratio_limit = 0.25
-
-		sorted_greatest_to_least = np.flip(np.argsort(np.absolute(waveform).max(axis=1)))
-		
-		bad_channels = []
-		correct_ch = -1
-		for ch in sorted_greatest_to_least:
-			ydata = waveform[ch]
-			max_index = np.absolute(ydata).argmax()
-			if max_index <= 1 or max_index >= len(ydata)-2:
-				continue
-			l_val, c_val, r_val = ydata[max_index-2], ydata[max_index], ydata[max_index+2]
-			if l_val/c_val < ratio_limit or r_val/c_val < ratio_limit:
-				bad_channels.append(ch)
-				continue
-			else:
-				correct_ch = ch
-				break
-
-		if correct_ch < 0:
-			raise
-				
-		return correct_ch, bad_channels
 	
 	def find_l_pos_autocor_full(self, xdata, ydata, display=False):
 		"""xxx fill in description
@@ -1208,7 +1306,7 @@ class Acdc:
 		def abs_diff_func(stat_ydata, slid_ydata, xdata_slid):
 			return trapezoid(np.abs(slid_ydata-stat_ydata), xdata_slid)
 		
-		lags, chi2_vals = compute_sliding_function(xdata, ydata, lower_bound, upper_bound, prompt_bspline, chi2_func, slide_increment=2, FAST=True)
+		lags, chi2_vals = compute_sliding_function(xdata, ydata, lower_bound, upper_bound, prompt_bspline, chi2_func, slide_increment=1, FAST=True)
 
 		height_cutoff = -0.45*chi2_vals.max()
 		distance_between_peaks = 10				# in units of indices
@@ -1620,7 +1718,7 @@ class Acdc:
 
 if __name__=='__main__':
 
-	# initialization dict
+	# initialization dictionary
 	init_dict = {
 		'acdc_id': 1,
 		'lappd_id': 1,
@@ -1637,14 +1735,17 @@ if __name__=='__main__':
 		'pedestal_counts': None,
 		'pedestal_voltage': None,
 		'voltage_count_curves': None,
-		'calib_data_file_path': r'testData/acdc_vcc_calibration_data/133741.root'
+		'calib_data_file_path': r'testData/acdc_vcc_calibration_data/most_up_to_date_test.root'
 	}
 
-
-	# data_path = r'/home/cameronpoe/Desktop/lappd_tof_container/testData/old_data/Raw_testData_20230615_170611_b0.txt'
-	data_path = r'/home/cameronpoe/Desktop/lappd_tof_container/testData/Raw_testData_ACC1_20230714_094508_b0.txt'
+	file_list = [r'testData/Raw_testData_ACC1_20230714_094508_b0.txt',
+			  r'testData/Raw_testData_ACC1_20230714_094640_b0.txt']
 
 	test_acdc = Acdc(init_dict)
+	
+	test_acdc.process_files(file_list)
+
+	exit()
 
 	# test_acdc.import_raw_data(data_path)
 
@@ -1652,10 +1753,10 @@ if __name__=='__main__':
 	# directory_to_save_to = r'/home/cameronpoe/Desktop/lappd_tof_container/testData/processed_data'
 	# test_acdc.save_data_npz(file_name_i_want_to_save_as, directory_path=directory_to_save_to)
 	
-	test_acdc.load_data_npz(r'testData/processed_data/current_working_data.npz')
+	# test_acdc.load_data_npz(r'testData/processed_data/current_working_data.npz')
 	# test_acdc.hist_single_cap_counts_vs_ped(10, 22)
 
-	# test_acdc.plot_ped_corrected_pulse(629)
+	test_acdc.plot_ped_corrected_pulse(380)
 
 	# test_acdc.plot_raw_lappd(350)
 
@@ -1667,7 +1768,7 @@ if __name__=='__main__':
 	# bad_events = [53]
 
 	# bad spline cfd events 620, 745
-	centers = test_acdc.find_event_centers(METHOD='least-squares-fast4', DEBUG_EVENTS=False, SAVE=True)
+	# centers = test_acdc.find_event_centers(METHOD='least-squares', DEBUG_EVENTS=True, SAVE=False, events=[623])
 	
 	exit()
 

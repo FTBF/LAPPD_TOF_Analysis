@@ -6,7 +6,7 @@ from matplotlib import pyplot as plt
 from matplotlib import colors
 import scipy
 from scipy.optimize import curve_fit, fsolve, fmin
-from scipy.interpolate import splrep, BSpline, CubicSpline, interp1d
+from scipy.interpolate import splrep, BSpline, CubicSpline, PPoly
 from scipy.signal import find_peaks, savgol_filter
 from scipy.integrate import trapezoid
 import uproot
@@ -15,7 +15,7 @@ from time import process_time
 from multiprocessing import Pool
 import numba
 
-MAX_PROCESSES = 1
+MAX_PROCESSES = 7
 CALIB_ADC = True
 CALIB_TIME_BASE = False
 
@@ -325,6 +325,8 @@ class Acdc:
 		self.calib_data_file_path = init_data_dict['calib_data_file_path']
 
 		self.cur_times, self.cur_times_320, self.cur_waveforms_raw, self.cur_waveforms = None, None, None, None
+
+		self.hpos, self.vpos = None, None
 		
 		# Imports waveform data if a path was specified upon Acdc initialization
 		if raw_waveform_data_path_list is not None:
@@ -627,26 +629,35 @@ class Acdc:
 		max_offset = 10
 		delta_t = 0.1
 		offsets = np.arange(0, max_offset, delta_t)
+
+		hpos_vec = []
+		vpos_vec = []
+
 		
+		t1 = process_time()
 		skipped = 0
 		for i, (yv, xh, yh, opt_ch, bad_ch) in enumerate(zip(ydata_v, xdata_h, ydata_h, opt_chs, bad_chs)):
-			# try:
-			if i == 3990:
+			try:
+			# if i == 3990:
 				xv = np.copy(self.strip_pos)
 				# Throws out misfired cap channel
 				if opt_ch != bad_ch:
 					xv = np.delete(np.copy(self.strip_pos), bad_ch)
 				
 				mu0 = xv[opt_ch]
+				hpos = self.calc_hpos(xh, yh, offsets)
 				vpos = self.calc_vpos(xv, yv, mu0)
 
-				hpos = self.calc_hpos(xh, yh, offsets)
-				exit()
+				hpos_vec.append(hpos)
+				vpos_vec.append(vpos)				
 				
-			# except:
-			# 	skipped += 1
+			except:
+				skipped += 1
+		t2 = process_time()
 
-		return
+		# print(t2-t1)
+
+		return hpos_vec, vpos_vec, skipped
 
 	def calc_vpos(self, xv, yv, mu0):
 
@@ -663,6 +674,34 @@ class Acdc:
 	
 	def calc_hpos(self, xh, yh, offsets):
 		
+		lbound, rbound = self.leading_edge_bounds(xh, yh)
+
+		lsquares = self.find_lsquares(xh, yh, lbound, rbound, offsets)
+
+		cut = (offsets > 3) & (offsets < 9)
+		peak_rough = offsets[cut][lsquares[cut].argmin()]
+
+		fitcut = (offsets > (peak_rough - 0.5)) & (offsets < (peak_rough + 0.5))
+		offsets_cut = offsets[fitcut]
+		lsquares_cut = lsquares[fitcut]
+		spline_tup = splrep(offsets_cut, lsquares_cut, k=4)
+		bspline = BSpline(*spline_tup)
+		dbspline = bspline.derivative()
+
+		ppoly = PPoly.from_spline(dbspline)
+		extrema = ppoly.roots(extrapolate=False)
+
+		extrema = extrema[(extrema > peak_rough - 0.2) & (extrema < peak_rough + 0.2)]
+
+		if len(extrema) > 0:
+			hpos = extrema[bspline(extrema).argsort()][-1]
+		else:
+			hpos = peak_rough
+
+		return hpos
+
+	def leading_edge_bounds(self, xh, yh):
+
 		yh_temp = -yh + yh.max()
 		min_height = 0.6*yh_temp.max()
 		peak_dist = 20
@@ -686,8 +725,12 @@ class Acdc:
 		lbound = cspline.solve(lbound_y, extrapolate=False)[0]
 		rbound = cspline.solve(rbound_y, extrapolate=False)[0]
 
-		bspline_vec = splrep(xh, yh, k=3)
-		bspline = BSpline(*bspline_vec)
+		return lbound, rbound
+
+	def find_lsquares(self, xh, yh, lbound, rbound, offsets):
+
+		bspline_tup = splrep(xh, yh, k=3)
+		bspline = BSpline(*bspline_tup)
 
 		x = np.linspace(lbound, rbound, 10)
 		y = bspline(x)
@@ -696,27 +739,60 @@ class Acdc:
 		y_shift = bspline(x_shift)
 
 		least_squares = (y_shift - y)**2
-		avg_lsquare = trapezoid(least_squares, x, axis=1)
+		avg_lsquares = trapezoid(least_squares, x, axis=1)
 
-		fig, ax = plt.subplots()
-
-		return
+		return avg_lsquares
 
 	def process_single_file(self, file_name):
 		times320, times, data_raw = self.import_raw_data(file_name)
 		ydata_v, xdata_h, ydata_h, vccs, opt_chs, bad_chs = self.preprocess_data(times320, data_raw)
-		self.calc_positions(ydata_v, xdata_h, ydata_h, opt_chs, bad_chs)
-		return
+		hpos, vpos, skipped = self.calc_positions(ydata_v, xdata_h, ydata_h, opt_chs, bad_chs)
+		return hpos, vpos, skipped
 
 	def process_files(self, file_list):
 
+		hpos_vec, vpos_vec, total_skipped = [], [], 0
 		if MAX_PROCESSES != 1:
 			with Pool(MAX_PROCESSES) as p:
 				file_list = convert_to_list(file_list)
-				p.map(self.process_single_file, file_list)
+				rv = p.map(self.process_single_file, file_list)
+
+			for hpos, vpos, skipped in rv:
+				hpos_vec.extend(hpos)
+				vpos_vec.extend(vpos)
+				total_skipped += skipped
+
 		else:
 			for file_name in file_list:
-				self.process_single_file(file_name)
+				hpos, vpos, skipped = self.process_single_file(file_name)
+				hpos_vec.extend(hpos)
+				vpos_vec.extend(vpos)
+				total_skipped += skipped
+
+		print(f'Total skipped: {round(100*total_skipped/(len(file_list)*10000.),2)}%')
+
+		self.hpos = np.array(hpos_vec)
+		self.vpos = np.array(vpos_vec)
+		return
+
+	def plot_centers(self):
+
+		mm_per_ns = 72
+		offset_in_ns = 3.5
+
+		fig, ax = plt.subplots()
+		fig.set_size_inches([10.5,8])
+
+		xbins, ybins = np.linspace(0,200,201), np.linspace(0,200,201)
+		h, xedges, yedges, image_mesh = ax.hist2d((self.hpos-offset_in_ns)*mm_per_ns, self.vpos, bins=(xbins, ybins))#, norm=matplotlib.colors.LogNorm())
+		ax.set_xlabel("dt(pulse, reflection)*v [mm]")
+		ax.set_ylabel("Y position (perpendicular to strips) [mm]")
+		fig.colorbar(image_mesh, ax=ax)
+
+		fig2, ax2 = plt.subplots()
+		ax2.hist(self.hpos, np.linspace(3.5, 6.5, 400))
+		
+		plt.show()
 
 		return
 
@@ -1680,42 +1756,6 @@ class Acdc:
 
 		return popt[2]
 
-	def plot_centers(self, centers):
-
-		mm_per_ns = 72
-		offset_in_ns = 3.5
-		mm_per_strip = 6.6
-
-		fig, ax = plt.subplots()
-		fig.set_size_inches([10.5,8])
-
-		xbins, ybins = np.linspace(0,200,201), np.linspace(0,200,201)
-		h, xedges, yedges, image_mesh = ax.hist2d((centers[:,0]-offset_in_ns)*mm_per_ns,centers[:,1]*mm_per_strip, bins=(xbins, ybins))#, norm=matplotlib.colors.LogNorm())
-		ax.set_xlabel("dt(pulse, reflection)*v [mm]")
-		ax.set_ylabel("Y position (perpendicular to strips) [mm]")
-		fig.colorbar(image_mesh, ax=ax)
-
-		fig2, ax2 = plt.subplots()
-		y_data = h[np.max(h, axis=1).argmax()]
-		x_data = xedges[:-1]
-		ax2.scatter(x_data, y_data)
-
-		# this fit thing isn't working yet
-		# def gauss_func(x, N, sigma, mu, A):
-		# 	return (N/np.sqrt(2*np.pi)*sigma)*np.exp(-1*(x-mu)*(x-mu)/(2*sigma*sigma)) + A
-		# N_guess = 10*max(y_data)
-		# sigma_guess = 0.1*(x_data[-1]-x_data[0])
-		# mu_guess = 0.5*(x_data[-1]+x_data[0])
-		# A_guess = min(y_data)
-		# p0 = [N_guess, sigma_guess, mu_guess, A_guess]
-		# popt, pcov = curve_fit(gauss_func, x_data, y_data, p0=p0)
-		# x_data_domain = np.linspace(x_data[0], x_data[-1], 200)
-		# ax2.plot(x_data_domain, gauss_func(x_data_domain, *popt))
-
-		plt.show()
-
-		return
-
 	#the calibration file is an .h5 file that holds a pandas dataframe
 	#that has the same dataframe structure as is listed above for self.df. 
 	#The one difference for simplicity is that the self.sync_dict is contained
@@ -1815,7 +1855,7 @@ if __name__=='__main__':
 		'len_cor': None,
 		'times': None,			 # xxx need a better name for this
 		'wraparound': None,
-		'vel': 0.18,			 # mm/ps, average (~500 MHz - 1GHz) propagation velocity of the strip 
+		'vel': 72,			 # mm/ns, average (~500 MHz - 1GHz) propagation velocity of the strip 
 		'dt': 1.0/(40e6*256),	 # picoseconds, nominal sampling time interval, 1/(clock to PSEC4 x number of samples)
 		# 'pedestal_data_path': r'/home/cameronpoe/Desktop/lappd_tof_container/testData/old_data/Raw_testData_20230615_164912_b0.txt',
 		'pedestal_data_path': r'/home/cameronpoe/Desktop/lappd_tof_container/testData/ped_Raw_testData_ACC1_20230714_093238_b0.txt',
@@ -1825,12 +1865,22 @@ if __name__=='__main__':
 		'calib_data_file_path': r'testData/acdc_vcc_calibration_data/most_up_to_date_test.root'
 	}
 
-	file_list = [r'testData/Raw_testData_ACC1_20230714_094508_b0.txt',
-			  r'testData/Raw_testData_ACC1_20230714_094640_b0.txt']
+	file_list = [r'testData/Raw_testData_ACC1_20230714_094355_b0.txt',
+		r'testData/Raw_testData_ACC1_20230714_094508_b0.txt',
+		r'testData/Raw_testData_ACC1_20230714_094640_b0.txt',
+		r'testData/Raw_testData_ACC1_20230714_094737_b0.txt',
+    	#r'testData/Raw_testData_ACC1_20230714_094940_b0.txt',
+    	#r'testData/Raw_testData_ACC1_20230714_095032_b0.txt',
+		#r'testData/Raw_testData_ACC1_20230714_095229_b0.txt',
+    	#r'testData/Raw_testData_ACC1_20230714_095300_b0.txt',
+    	#r'testData/Raw_testData_ACC1_20230714_095543_b0.txt',
+		]
 
 	test_acdc = Acdc(init_dict)
 	
 	test_acdc.process_files(file_list)
+
+	test_acdc.plot_centers()
 
 	exit()
 

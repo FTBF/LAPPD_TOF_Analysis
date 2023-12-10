@@ -270,6 +270,10 @@ def faster_splrep(data_raw, voltage_counts):
 
 	return data
 
+@numba.jit(nopython=True)
+def gauss_const_back(x, A, c, mu, B):
+	return A*np.exp(-c*(x-mu)**2) + B
+
 #This class represents the ACDC boards, and thus
 #in proxy an LAPPD - as in the LAPPD TOF system we plan
 #to use one Acdc for each LAPPD, read out in single-ended
@@ -534,7 +538,9 @@ class Acdc:
 				# plt.show()
 			t2 = process_time()
 
-			print(t2-t1)
+			# print(t2-t1)
+
+			data = data[:,self.chan_rearrange,:]
 		
 		else:
 			# Rearranges channels based on how striplines are connected to the PSEC4 chips
@@ -548,7 +554,7 @@ class Acdc:
 		ydata_v, opt_chs, bad_chs = self.v_data_opt_ch(data)
 		t2 = process_time()
 
-		print(t2-t1)
+		# print(t2-t1)
 
 		t1 = process_time()
 		if CALIB_TIME_BASE:
@@ -570,7 +576,7 @@ class Acdc:
 			ydata_h = np.array([np.roll(np.copy(subdata[i,:]), -trigger_low[i]) for i in range(trigger_low.shape[0])])
 		t2 = process_time()
 
-		print(t2-t1)
+		# print(t2-t1)
 
 		# fig, ax = plt.subplots()
 		# ax.scatter(xdata_h[4983,:], data_raw[4983,opt_chs[4983],:], marker='.')
@@ -616,9 +622,90 @@ class Acdc:
 				
 		return mindata, opt_chs, bad_channels
 
+	def calc_positions(self, ydata_v, xdata_h, ydata_h, opt_chs, bad_chs):
+
+		max_offset = 10
+		delta_t = 0.1
+		offsets = np.arange(0, max_offset, delta_t)
+		
+		skipped = 0
+		for i, (yv, xh, yh, opt_ch, bad_ch) in enumerate(zip(ydata_v, xdata_h, ydata_h, opt_chs, bad_chs)):
+			# try:
+			if i == 3990:
+				xv = np.copy(self.strip_pos)
+				# Throws out misfired cap channel
+				if opt_ch != bad_ch:
+					xv = np.delete(np.copy(self.strip_pos), bad_ch)
+				
+				mu0 = xv[opt_ch]
+				vpos = self.calc_vpos(xv, yv, mu0)
+
+				hpos = self.calc_hpos(xh, yh, offsets)
+				exit()
+				
+			# except:
+			# 	skipped += 1
+
+		return
+
+	def calc_vpos(self, xv, yv, mu0):
+
+		p0 = [-0.25*yv.max(), 0.01, mu0, 0.8]
+		popt, pcov = curve_fit(gauss_const_back, xv, yv, p0=p0)
+		# fig, ax = plt.subplots()
+		# ax.scatter(xv, yv, marker='.', color='black')
+		# domain = np.linspace(xv[0], xv[-1], 200)
+		# ax.plot(domain, gauss_const_back(domain, *p0), color='green')
+		# ax.plot(domain, gauss_const_back(domain, *popt), color='red')
+		# plt.show()
+
+		return popt[2]
+	
+	def calc_hpos(self, xh, yh, offsets):
+		
+		yh_temp = -yh + yh.max()
+		min_height = 0.6*yh_temp.max()
+		peak_dist = 20
+		peak_region_rad = 15
+		
+		peaks_rough = find_peaks(yh_temp, height=min_height, distance=peak_dist)[0]
+		prompt_ind, reflect_ind = np.sort(peaks_rough[yh[peaks_rough].argsort()[0:2]])
+
+		lbound = prompt_ind - 20
+		if lbound < 0:
+			lbound = 0
+		rbound = prompt_ind + 4
+		subdomain = xh[lbound:rbound]
+		subrange = yh[lbound:rbound]
+		cspline = CubicSpline(subdomain, subrange, extrapolate=False)
+
+		ymin, ymax = yh[0], yh.min()
+		lbound_y = ymin - 0.1*(ymin-ymax)
+		rbound_y = ymin - 0.9*(ymin-ymax)
+		
+		lbound = cspline.solve(lbound_y, extrapolate=False)[0]
+		rbound = cspline.solve(rbound_y, extrapolate=False)[0]
+
+		bspline_vec = splrep(xh, yh, k=3)
+		bspline = BSpline(*bspline_vec)
+
+		x = np.linspace(lbound, rbound, 10)
+		y = bspline(x)
+
+		x_shift = np.vstack([x + dt for dt in offsets])
+		y_shift = bspline(x_shift)
+
+		least_squares = (y_shift - y)**2
+		avg_lsquare = trapezoid(least_squares, x, axis=1)
+
+		fig, ax = plt.subplots()
+
+		return
+
 	def process_single_file(self, file_name):
 		times320, times, data_raw = self.import_raw_data(file_name)
-		self.preprocess_data(times320, data_raw)
+		ydata_v, xdata_h, ydata_h, vccs, opt_chs, bad_chs = self.preprocess_data(times320, data_raw)
+		self.calc_positions(ydata_v, xdata_h, ydata_h, opt_chs, bad_chs)
 		return
 
 	def process_files(self, file_list):

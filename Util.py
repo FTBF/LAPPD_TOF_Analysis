@@ -3,7 +3,7 @@ from textwrap import fill
 import numpy as np
 from datetime import datetime
 import yaml
-import bitstruct as bitstruct
+import bitstruct.c as bitstruct
 import scipy
 import scipy.optimize
 import scipy.interpolate
@@ -364,6 +364,7 @@ class Util:
 				y_matrix.append(np.array(chTimeOffsetMatrix))
 				w_matrix.append(np.array(chTimeVarMatrix))
 			timebase[channel] = np.linalg.lstsq(np.divide(np.concatenate(a_matrix, axis=0),np.concatenate(w_matrix, axis=0)), np.divide(np.concatenate(y_matrix, axis=None),np.concatenate(w_matrix, axis=0).squeeze()), rcond=None)[0].squeeze()
+			print(timebase[channel])
 		self.time_df[:] = timebase#Keep the address to the array the same so that TTree can read it.
 		self.save()
 		return sineData
@@ -823,7 +824,10 @@ class Util:
 		plt.show()
 	def raw_plot(self):
 		event = self.measurement_config["plot"]["event"]
-		rawData = Util.getDataRaw([self.measurement_config["plot"]["input"]])[2]
+		times320, times, rawData = Util.getDataRaw([self.measurement_config["plot"]["input"]])
+		if(VERBOSE):
+			print("320MHz counter modulo 8 histogram for all events:")
+			print(np.histogram(times320 % 8, bins = [0, 1,2,3,4,5,6,7])[0])
 		plt.title("Time offset and voltage calibration")
 		plt.xlabel("time [s]")
 		plt.ylabel("Voltage [V]")
@@ -861,8 +865,11 @@ class Util:
 		plt.show()
 	def simple_plot(self):
 		event = self.measurement_config["plot"]["event"]
-		rawData = Util.getDataRaw([self.measurement_config["plot"]["input"]])[2]
+		times320, times, rawData = Util.getDataRaw([self.measurement_config["plot"]["input"]])
 		sineData = self.linearize_voltage(rawData) - 1.2/4096*self.measurement_config["plot"]["pedestal"]
+		if(VERBOSE):
+			print("320MHz counter modulo 8 histogram for all events:")
+			print(np.histogram(times320 % 8, bins = [0, 1,2,3,4,5,6,7])[0])
 		plt.title("Time offset and voltage calibration")
 		plt.xlabel("time [s]")
 		plt.ylabel("Voltage [V]")

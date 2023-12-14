@@ -335,12 +335,14 @@ class Util:
 					
 					A = np.column_stack([x[iCap]**2, x[iCap] * y[iCap], y[iCap]**2, x[iCap], y[iCap]])
 					b = np.ones_like(x[iCap])
-					fit = np.linalg.lstsq(A, b, rcond=None)[0].squeeze()
-					res = np.linalg.lstsq(A, b, rcond=None)[1]
+					lstsq = np.linalg.lstsq(A, b, rcond=None)
+					fit = lstsq[0].squeeze()
+					res = lstsq[1] / (1/fit[0]+1/fit[2])# rough estimation of the size of the ellipse.
 					coefs.append(fit)
 					#print(fit)
-
-					try:  
+					try:
+						if(np.shape(res)!=(1,)):
+							raise Exception("")
 						a = -math.sqrt(2*(fit[0]*fit[4]**2+fit[2]*fit[3]**2-fit[1]*fit[3]*fit[4]-(fit[1]**2-4*fit[0]*fit[2]))*(fit[0]+fit[2]+math.sqrt((fit[0]-fit[2])**2+fit[1]**2)))/(fit[1]**2 - 4*fit[0]*fit[2])
 						#print("a = %f"%a)
 						b = -math.sqrt(2*(fit[0]*fit[4]**2+fit[2]*fit[3]**2-fit[1]*fit[3]*fit[4]-(fit[1]**2-4*fit[0]*fit[2]))*(fit[0]+fit[2]-math.sqrt((fit[0]-fit[2])**2+fit[1]**2)))/(fit[1]**2 - 4*fit[0]*fit[2])
@@ -349,22 +351,41 @@ class Util:
 						dtij = math.atan(b/a)/(math.pi*true_freq)
 						#print("dtij = %f ps"%(dtij*1e12))
 						chTimeOffsetMatrix.append(dtij)
-						
+						if(diff==1 and iCap==255):
+							chTimeVarMatrix.append(res/5)#Compensation for wraparound.
+						else:
+							chTimeVarMatrix.append(res)
 					except:
-						chTimeOffsetMatrix.append(100.0e-12)
-					chTimeVarMatrix.append(res)
+						chTimeOffsetMatrix.append(100.0e-12*diff)
+						chTimeVarMatrix.append(np.array([30.0*diff]))
 				vsize = 256-diff
-				if(diff==1):vsize = 256
+				if(diff==1):
+					vsize = 256
+
 				arr = np.zeros((vsize,256))
 				for i in range(vsize):
 					for j in range(256):#Do not include wraparound terms for diff>1
 						if(j-i>=0 and j-i<diff):
 							arr[i,j] = 1
+						if(i>=256 and j==256):
+							arr[i,j] = 1
 				a_matrix.append(arr)
 				y_matrix.append(np.array(chTimeOffsetMatrix))
 				w_matrix.append(np.array(chTimeVarMatrix))
+			#Normalization so that the sum of timebase is 25ns
+			a_matrix.append(np.ones((1,256)))
+			y_matrix.append(np.array([25e-9]))
+			w_matrix.append(np.array([np.array([1])]))#Have a really small number
 			timebase[channel] = np.linalg.lstsq(np.divide(np.concatenate(a_matrix, axis=0),np.concatenate(w_matrix, axis=0)), np.divide(np.concatenate(y_matrix, axis=None),np.concatenate(w_matrix, axis=0).squeeze()), rcond=None)[0].squeeze()
-			print(timebase[channel])
+			if(VERBOSE):
+				print(timebase[channel])
+				print(np.sum(timebase[channel]))
+				plt.title("Timebase Weighted")
+				plt.xlabel("Sample Number")
+				plt.ylabel("Timebase [s]")
+				plt.errorbar(range(256), np.concatenate(y_matrix, axis=None)[0:256], np.concatenate(w_matrix, axis=0).squeeze()[0:256] * 1e-13, ecolor="black")
+				plt.plot(range(256), timebase[channel])
+				plt.show()
 		self.time_df[:] = timebase#Keep the address to the array the same so that TTree can read it.
 		self.save()
 		return sineData

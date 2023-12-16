@@ -1,6 +1,6 @@
 import numpy as np
 import pandas as pd
-import Event 
+import Events 
 import Acdc
 from datetime import datetime
 import yaml
@@ -71,7 +71,7 @@ class Loader:
 			#at this stage all of the ACDCs have had their waveforms updated.
 			#create an event object that holds the ACDCs and tell the event object 
 			#which analysis steps to run. 
-			e = Event.Event(num=0, acdcs=self.acdcs)#we will get rid of the event class.
+			e = Events.Events(num=0, acdcs=self.acdcs)#we will get rid of the event class.
 			coinc = e.check_coincidence(window=30) #check metadata variables to see if there is coincidence between detectors
 			if(coinc == False):
 				continue

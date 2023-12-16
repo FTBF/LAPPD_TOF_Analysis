@@ -1,4 +1,5 @@
 import math
+import random
 from textwrap import fill
 import numpy as np
 from datetime import datetime
@@ -21,10 +22,11 @@ from datetime import date
 OLD_FORMAT = False
 DEBUG = False
 VERBOSE = False
+SAVE = True
 class Util:
 	def __init__(self, board_config=None):
 		self.measurement_config = Util.load_config(board_config)
-		if(os.path.isfile(self.measurement_config["calibration_file"])):
+		if os.path.isfile(self.measurement_config["calibration_file"]):
 			in_file = uproot.open(self.measurement_config["calibration_file"])
 			
 			self.voltage_df = np.reshape(in_file["config_tree"]["voltage_count_curves"].array(library="np"), (30,256,256, 2))
@@ -146,8 +148,8 @@ class Util:
 				plt.xlabel("reference voltage (V)")
 				plt.ylabel("measured ADC")
 				plt.show()
-
-		self.save()
+		if(SAVE):
+			self.save()
 	#Deprecated
 	def find_trigger_pos2(self, sineData):
 		nevents = self.measurement_config["timebase"]["nevents"]
@@ -329,8 +331,14 @@ class Util:
 					cap1 = iCap+256
 					cap2 = iCap+256+diff
 					if(diff>1 and iCap+diff>255):continue
-					x.append(ydata2[:,channel, cap2] + ydata2[:,channel, cap1])
-					y.append(ydata2[:,channel, cap1] - ydata2[:,channel, cap2])
+					r = []
+					for e in range(0,nevents):
+						#if cap1 <= trigger[e]+256 <= cap2:
+						#	continue
+						#else:
+						r.append(e)
+					x.append(ydata2[r,channel, cap2] + ydata2[r,channel, cap1])
+					y.append(ydata2[r,channel, cap1] - ydata2[r,channel, cap2])
 					# Formulate and solve the least squares problem ||Ax - b ||^2
 					
 					A = np.column_stack([x[iCap]**2, x[iCap] * y[iCap], y[iCap]**2, x[iCap], y[iCap]])
@@ -355,6 +363,17 @@ class Util:
 							chTimeVarMatrix.append(res/5)#Compensation for wraparound.
 						else:
 							chTimeVarMatrix.append(res)
+						if(VERBOSE and diff == 1 and iCap==255):
+							plt.title("Channel %d, cap %d vs cap %d, t0 %d[ps]"%(channel, cap1, cap2, dtij*1e12))
+							plt.scatter(x[iCap], y[iCap])
+							# Plot the least squares ellipse
+							x_coord = np.linspace(1.05*x[iCap].min(),1.05*x[iCap].max(),300)
+							y_coord = np.linspace(1.05*y[iCap].min(),1.05*y[iCap].max(),300)
+							X_coord, Y_coord = np.meshgrid(x_coord, y_coord)
+							Z_coord = fit[0] * (X_coord ** 2) + fit[1] * X_coord* Y_coord + fit[2] * Y_coord**2+ fit[3] * X_coord+ fit[4] * Y_coord
+							plt.contour(X_coord, Y_coord, Z_coord, levels=[1], colors=('r'), linewidths=2)
+							plt.savefig("plots/channel%d_cap%d.png"%(channel, iCap))
+							plt.show()
 					except:
 						chTimeOffsetMatrix.append(100.0e-12*diff)
 						chTimeVarMatrix.append(np.array([30.0*diff]))
@@ -384,10 +403,118 @@ class Util:
 				plt.xlabel("Sample Number")
 				plt.ylabel("Timebase [s]")
 				plt.errorbar(range(256), np.concatenate(y_matrix, axis=None)[0:256], np.concatenate(w_matrix, axis=0).squeeze()[0:256] * 1e-13, ecolor="black")
-				plt.plot(range(256), timebase[channel])
+				plt.step(range(256), timebase[channel])
 				plt.show()
-		self.time_df[:] = timebase#Keep the address to the array the same so that TTree can read it.
-		self.save()
+		if(SAVE):
+			for channel in self.measurement_config["timebase"]["channels"]:
+				self.time_df[channel] = timebase[channel]#Keep the address to the array the same so that TTree can read it.
+			self.save()
+		return sineData
+	#Reads a raw data file and saves a timebase calibration file.
+
+	def simulate_timebase_weighted(self):
+		timebase = self.time_df
+		freq = 250e6
+		sineData = np.zeros(shape=(1000, 30, 256))
+		trigger = np.zeros(shape=(1000))
+		for event in range(1000):
+			phase = random.uniform(0, 2*np.pi)
+			trig = random.randrange(256)
+			sineData[event] = np.roll(np.sin(2*np.pi*freq*np.cumsum(np.roll(timebase, (255-trig)+1, axis= 1), axis=1)+phase), trig-255, axis = 1)
+			trigger[event] = trig
+		true_freq = self.measurement_config["timebase"]["true_freq"]#Frequency of the signal source used for timebase measurement.
+		nevents = self.measurement_config["timebase"]["nevents"]
+		print(sineData[200 ,0])
+		ydata = sineData
+		ydata2 = np.concatenate((ydata, ydata, ydata), axis=2)
+		for channel in self.measurement_config["timebase"]["channels"]:
+			a_matrix = []
+			y_matrix = []
+			w_matrix = []
+			for diff in [1, 2, 3, 4, 5, 6]:
+				chTimeOffsetMatrix = []
+				chTimeVarMatrix = []
+				x = []
+				y =[]
+				coefs = []
+				for iCap in range(256):
+					cap1 = iCap+256
+					cap2 = iCap+256+diff
+					if(diff>1 and iCap+diff>255):continue
+					r = []
+					for e in range(0,nevents):
+						if cap1 <= trigger[e]+256 <= cap2:
+							continue
+						else:
+							r.append(e)
+					x.append(ydata2[r,channel, cap2] + ydata2[r,channel, cap1])
+					y.append(ydata2[r,channel, cap1] - ydata2[r,channel, cap2])
+					# Formulate and solve the least squares problem ||Ax - b ||^2
+
+					A = np.column_stack([x[iCap]**2, x[iCap] * y[iCap], y[iCap]**2, x[iCap], y[iCap]])
+					b = np.ones_like(x[iCap])
+					lstsq = np.linalg.lstsq(A, b, rcond=None)
+					fit = lstsq[0].squeeze()
+					res = lstsq[1] / (1/fit[0]+1/fit[2])# rough estimation of the size of the ellipse.
+					coefs.append(fit)
+					#print(fit)
+					try:
+						if(np.shape(res)!=(1,)):
+							raise Exception("")
+						a = -math.sqrt(2*(fit[0]*fit[4]**2+fit[2]*fit[3]**2-fit[1]*fit[3]*fit[4]-(fit[1]**2-4*fit[0]*fit[2]))*(fit[0]+fit[2]+math.sqrt((fit[0]-fit[2])**2+fit[1]**2)))/(fit[1]**2 - 4*fit[0]*fit[2])
+						#print("a = %f"%a)
+						b = -math.sqrt(2*(fit[0]*fit[4]**2+fit[2]*fit[3]**2-fit[1]*fit[3]*fit[4]-(fit[1]**2-4*fit[0]*fit[2]))*(fit[0]+fit[2]-math.sqrt((fit[0]-fit[2])**2+fit[1]**2)))/(fit[1]**2 - 4*fit[0]*fit[2])
+						#print("b = %f"%b)
+
+						dtij = math.atan(b/a)/(math.pi*true_freq)
+						#print("dtij = %f ps"%(dtij*1e12))
+						chTimeOffsetMatrix.append(dtij)
+						if(diff==1):
+							chTimeVarMatrix.append(res/5)#Compensation for wraparound.
+						else:
+							chTimeVarMatrix.append(res)
+						if(VERBOSE and diff == 1 and 0<=iCap<=15):
+							plt.title("Channel %d, cap %d vs cap %d, t0 %d[ps]"%(channel, cap1, cap2, dtij*1e12))
+							plt.scatter(x[iCap], y[iCap])
+							# Plot the least squares ellipse
+							x_coord = np.linspace(1.05*x[iCap].min(),1.05*x[iCap].max(),300)
+							y_coord = np.linspace(1.05*y[iCap].min(),1.05*y[iCap].max(),300)
+							X_coord, Y_coord = np.meshgrid(x_coord, y_coord)
+							Z_coord = fit[0] * (X_coord ** 2) + fit[1] * X_coord* Y_coord + fit[2] * Y_coord**2+ fit[3] * X_coord+ fit[4] * Y_coord
+							plt.contour(X_coord, Y_coord, Z_coord, levels=[1], colors=('r'), linewidths=2)
+							plt.savefig("plots/channel%d_cap%d.png"%(channel, iCap))
+							plt.show()
+					except:
+						chTimeOffsetMatrix.append(100.0e-12*diff)
+						chTimeVarMatrix.append(np.array([30.0*diff]))
+				vsize = 256-diff
+				if(diff==1):
+					vsize = 256
+
+				arr = np.zeros((vsize,256))
+				for i in range(vsize):
+					for j in range(256):#Do not include wraparound terms for diff>1
+						if(j-i>=0 and j-i<diff):
+							arr[i,j] = 1
+						if(i>=256 and j==256):
+							arr[i,j] = 1
+				a_matrix.append(arr)
+				y_matrix.append(np.array(chTimeOffsetMatrix))
+				w_matrix.append(np.array(chTimeVarMatrix))
+			#Normalization so that the sum of timebase is 25ns
+			a_matrix.append(np.ones((1,256)))
+			y_matrix.append(np.array([25e-9]))
+			w_matrix.append(np.array([np.array([1])]))#Have a really small number
+			timebase[channel] = np.linalg.lstsq(np.divide(np.concatenate(a_matrix, axis=0),np.concatenate(w_matrix, axis=0)), np.divide(np.concatenate(y_matrix, axis=None),np.concatenate(w_matrix, axis=0).squeeze()), rcond=None)[0].squeeze()
+			if(VERBOSE):
+				print(timebase[channel])
+				print(np.sum(timebase[channel]))
+				plt.title("Timebase Weighted")
+				plt.xlabel("Sample Number")
+				plt.ylabel("Timebase [s]")
+				plt.errorbar(range(256), np.concatenate(y_matrix, axis=None)[0:256], np.concatenate(w_matrix, axis=0).squeeze()[0:256] * 1e-13, ecolor="black")
+				plt.step(range(256), timebase[channel])
+				plt.show()
 		return sineData
 	#Reads a raw data file and saves a timebase calibration file.
 	def create_timebase_first_order(self):
@@ -844,88 +971,158 @@ class Util:
 		plt.legend(loc="lower right")
 		plt.show()
 	def raw_plot(self):
-		event = self.measurement_config["plot"]["event"]
+		events = self.measurement_config["plot"]["event"]
 		times320, times, rawData = Util.getDataRaw([self.measurement_config["plot"]["input"]])
+		if VERBOSE:
+			print("320MHz counter modulo 8 histogram for all events:")
+			print(np.histogram(times320 % 8, bins = [0, 1,2,3,4,5,6,7])[0])
+		for event in events:
+			if VERBOSE:
+				print("320MHz:")
+				print(times320[event])
+				print("1PPS:")
+				print((times[event] >> 32 ) & 0xffffffff)
+				print("250MHz:")
+				print(times[event] & 0xffffffff)
+			plt.title("Time offset and voltage calibration")
+			plt.xlabel("time [s]")
+			plt.ylabel("Voltage [V]")
+			for channel in [0,1,2,3,4,5]:
+				plt.plot(np.linspace(0, 255,256), rawData[event, channel, :], label=str(channel))
+			plt.axvline((((times320[event]) % 8))*32-16)
+			plt.legend(loc="lower right")
+			plt.show()
+			plt.title("Time offset and voltage calibration")
+			plt.xlabel("time [s]")
+			plt.ylabel("Voltage [V]")
+			for channel in [6,7,8,9,10,11]:
+				plt.plot(np.linspace(0, 255,256), rawData[event, channel, :], label=str(channel))
+			plt.axvline((((times320[event]) % 8))*32-16)
+			plt.legend(loc="lower right")
+			plt.show()
+			plt.title("Time offset and voltage calibration")
+			plt.xlabel("time [s]")
+			plt.ylabel("Voltage [V]")
+			for channel in [12,13,14,15,16,17]:
+				plt.plot(np.linspace(0, 255,256), rawData[event, channel, :], label=str(channel))
+			plt.axvline((((times320[event]) % 8))*32-16)
+			plt.legend(loc="lower right")
+			plt.show()
+			plt.title("Time offset and voltage calibration")
+			plt.xlabel("time [s]")
+			plt.ylabel("Voltage [V]")
+			for channel in [18,19,20,21,22,23]:
+				plt.plot(np.linspace(0, 255,256), rawData[event, channel, :], label=str(channel))
+			plt.axvline((((times320[event]) % 8))*32-16)
+			plt.legend(loc="lower right")
+			plt.show()
+			plt.title("Time offset and voltage calibration")
+			plt.xlabel("time [s]")
+			plt.ylabel("Voltage [V]")
+			for channel in [24,25,26,27,28,29]:
+				plt.plot(np.linspace(0, 255,256), rawData[event, channel, :], label=str(channel))
+			plt.axvline((((times320[event]) % 8))*32-16)
+			plt.legend(loc="lower right")
+			plt.show()
+	def plot_with_timebase(self):
+		events = self.measurement_config["plot"]["event"]
+		times320, times, rawData = Util.getDataRaw([self.measurement_config["plot"]["input"]])
+		sineData = self.linearize_voltage(rawData) - 1.2/4096*self.measurement_config["plot"]["pedestal"]
+		sineData = np.concatenate((sineData,sineData),axis=2)
+		timebase = np.cumsum(np.roll(np.concatenate((self.time_df, self.time_df), axis = 1), 1, axis=1), axis = 1)
 		if(VERBOSE):
 			print("320MHz counter modulo 8 histogram for all events:")
 			print(np.histogram(times320 % 8, bins = [0, 1,2,3,4,5,6,7])[0])
-		plt.title("Time offset and voltage calibration")
-		plt.xlabel("time [s]")
-		plt.ylabel("Voltage [V]")
-		for channel in [0,1,2,3,4,5]:
-			plt.plot(np.linspace(0, 255,256), rawData[event, channel, :], label=str(channel))
-		plt.legend(loc="lower right")
-		plt.show()
-		plt.title("Time offset and voltage calibration")
-		plt.xlabel("time [s]")
-		plt.ylabel("Voltage [V]")
-		for channel in [6,7,8,9,10,11]:
-			plt.plot(np.linspace(0, 255,256), rawData[event, channel, :], label=str(channel))
-		plt.legend(loc="lower right")
-		plt.show()
-		plt.title("Time offset and voltage calibration")
-		plt.xlabel("time [s]")
-		plt.ylabel("Voltage [V]")
-		for channel in [12,13,14,15,16,17]:
-			plt.plot(np.linspace(0, 255,256), rawData[event, channel, :], label=str(channel))
-		plt.legend(loc="lower right")
-		plt.show()
-		plt.title("Time offset and voltage calibration")
-		plt.xlabel("time [s]")
-		plt.ylabel("Voltage [V]")
-		for channel in [18,19,20,21,22,23]:
-			plt.plot(np.linspace(0, 255,256), rawData[event, channel, :], label=str(channel))
-		plt.legend(loc="lower right")
-		plt.show()
-		plt.title("Time offset and voltage calibration")
-		plt.xlabel("time [s]")
-		plt.ylabel("Voltage [V]")
-		for channel in [24,25,26,27,28,29]:
-			plt.plot(np.linspace(0, 255,256), rawData[event, channel, :], label=str(channel))
-		plt.legend(loc="lower right")
-		plt.show()
+		for event in events:
+			plt.title("Time offset and voltage calibration")
+			plt.xlabel("time [s]")
+			plt.ylabel("Voltage [V]")
+			for channel in [0,1,2,3,4,5]:
+				plt.plot(timebase[channel], sineData[event, channel, :], label=str(channel))
+			plt.axvline(timebase[channel][(((times320[event]) % 8))*32-16])
+			plt.legend(loc="lower right")
+			plt.show()
+			plt.title("Time offset and voltage calibration")
+			plt.xlabel("time [s]")
+			plt.ylabel("Voltage [V]")
+			for channel in [6,7,8,9,10,11]:
+				plt.plot(timebase[channel], sineData[event, channel, :], label=str(channel))
+			plt.axvline(timebase[channel][(((times320[event]) % 8))*32-16])
+			plt.legend(loc="lower right")
+			plt.show()
+			plt.title("Time offset and voltage calibration")
+			plt.xlabel("time [s]")
+			plt.ylabel("Voltage [V]")
+			for channel in [12,13,14,15,16,17]:
+				plt.plot(timebase[channel], sineData[event, channel, :], label=str(channel))
+			plt.axvline(timebase[channel][(((times320[event]) % 8))*32-16])
+			plt.legend(loc="lower right")
+			plt.show()
+			plt.title("Time offset and voltage calibration")
+			plt.xlabel("time [s]")
+			plt.ylabel("Voltage [V]")
+			for channel in [18,19,20,21,22,23]:
+				plt.plot(timebase[channel], sineData[event, channel, :], label=str(channel))
+			plt.axvline(timebase[channel][(((times320[event]) % 8))*32-16])
+			plt.legend(loc="lower right")
+			plt.show()
+			plt.title("Time offset and voltage calibration")
+			plt.xlabel("time [s]")
+			plt.ylabel("Voltage [V]")
+			for channel in [24,25,26,27,28,29]:
+				plt.plot(timebase[channel], sineData[event, channel, :], label=str(channel))
+			plt.axvline(timebase[channel][(((times320[event]) % 8))*32-16])
+			plt.legend(loc="lower right")
+			plt.show()
+
 	def simple_plot(self):
-		event = self.measurement_config["plot"]["event"]
+		events = self.measurement_config["plot"]["event"]
 		times320, times, rawData = Util.getDataRaw([self.measurement_config["plot"]["input"]])
 		sineData = self.linearize_voltage(rawData) - 1.2/4096*self.measurement_config["plot"]["pedestal"]
 		if(VERBOSE):
 			print("320MHz counter modulo 8 histogram for all events:")
 			print(np.histogram(times320 % 8, bins = [0, 1,2,3,4,5,6,7])[0])
-		plt.title("Time offset and voltage calibration")
-		plt.xlabel("time [s]")
-		plt.ylabel("Voltage [V]")
-		for channel in [0,1,2,3,4,5]:
-			plt.plot(np.linspace(0, 255,256), sineData[event, channel, :], label=str(channel))
-		plt.legend(loc="lower right")
-		plt.show()
-		plt.title("Time offset and voltage calibration")
-		plt.xlabel("time [s]")
-		plt.ylabel("Voltage [V]")
-		for channel in [6,7,8,9,10,11]:
-			plt.plot(np.linspace(0, 255,256), sineData[event, channel, :], label=str(channel))
-		plt.legend(loc="lower right")
-		plt.show()
-		plt.title("Time offset and voltage calibration")
-		plt.xlabel("time [s]")
-		plt.ylabel("Voltage [V]")
-		for channel in [12,13,14,15,16,17]:
-			plt.plot(np.linspace(0, 255,256), sineData[event, channel, :], label=str(channel))
-		plt.legend(loc="lower right")
-		plt.show()
-		plt.title("Time offset and voltage calibration")
-		plt.xlabel("time [s]")
-		plt.ylabel("Voltage [V]")
-		for channel in [18,19,20,21,22,23]:
-			plt.plot(np.linspace(0, 255,256), sineData[event, channel, :], label=str(channel))
-		plt.legend(loc="lower right")
-		plt.show()
-		plt.title("Time offset and voltage calibration")
-		plt.xlabel("time [s]")
-		plt.ylabel("Voltage [V]")
-		for channel in [24,25,26,27,28,29]:
-			plt.plot(np.linspace(0, 255,256), sineData[event, channel, :], label=str(channel))
-		plt.legend(loc="lower right")
-		plt.show()
+		for event in events:
+			plt.title("Time offset and voltage calibration")
+			plt.xlabel("time [s]")
+			plt.ylabel("Voltage [V]")
+			for channel in [0,1,2,3,4,5]:
+				plt.plot(np.linspace(0, 255,256), sineData[event, channel, :], label=str(channel))
+			plt.axvline((((times320[event]) % 8))*32-16)
+			plt.legend(loc="lower right")
+			plt.show()
+			plt.title("Time offset and voltage calibration")
+			plt.xlabel("time [s]")
+			plt.ylabel("Voltage [V]")
+			for channel in [6,7,8,9,10,11]:
+				plt.plot(np.linspace(0, 255,256), sineData[event, channel, :], label=str(channel))
+			plt.axvline((((times320[event]) % 8))*32-16)
+			plt.legend(loc="lower right")
+			plt.show()
+			plt.title("Time offset and voltage calibration")
+			plt.xlabel("time [s]")
+			plt.ylabel("Voltage [V]")
+			for channel in [12,13,14,15,16,17]:
+				plt.plot(np.linspace(0, 255,256), sineData[event, channel, :], label=str(channel))
+			plt.axvline((((times320[event]) % 8))*32-16)
+			plt.legend(loc="lower right")
+			plt.show()
+			plt.title("Time offset and voltage calibration")
+			plt.xlabel("time [s]")
+			plt.ylabel("Voltage [V]")
+			for channel in [18,19,20,21,22,23]:
+				plt.plot(np.linspace(0, 255,256), sineData[event, channel, :], label=str(channel))
+			plt.axvline((((times320[event]) % 8))*32-16)
+			plt.legend(loc="lower right")
+			plt.show()
+			plt.title("Time offset and voltage calibration")
+			plt.xlabel("time [s]")
+			plt.ylabel("Voltage [V]")
+			for channel in [24,25,26,27,28,29]:
+				plt.plot(np.linspace(0, 255,256), sineData[event, channel, :], label=str(channel))
+			plt.axvline((((times320[event]) % 8))*32-16)
+			plt.legend(loc="lower right")
+			plt.show()
 
 	def savitzky_golay(y, window_size, order, deriv=0, rate=1):
 		from math import factorial
@@ -998,12 +1195,16 @@ if __name__ == "__main__":
 		ut.raw_plot()
 	if 'p' in ut.measurement_config["tasks"]:
 		ut.simple_plot()
+	if 'P' in ut.measurement_config["tasks"]:
+		ut.plot_with_timebase()
 	if 'v' in ut.measurement_config["tasks"]:
 		ut.create_voltage_curve()
 	if 't' in ut.measurement_config["tasks"]:
 		ut.create_timebase_simple()
 	if 'w' in ut.measurement_config["tasks"]:
 		ut.create_timebase_weighted()
+	if 'W' in ut.measurement_config["tasks"]:
+		ut.simulate_timebase_weighted()
 	if 'T' in ut.measurement_config["tasks"]:
 		ut.create_timebase_first_order()
 	if 'j' in ut.measurement_config["tasks"]:
@@ -1012,6 +1213,8 @@ if __name__ == "__main__":
 		ut.timebase_slope_1p_correction()
 	if 'n' in ut.measurement_config["tasks"]:
 		ut.phase_dist_square_norm()
+	if 'N' in ut.measurement_config["tasks"]:
+		SAVE = False
 
 
 

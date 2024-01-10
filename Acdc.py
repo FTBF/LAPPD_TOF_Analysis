@@ -19,6 +19,7 @@ MAX_PROCESSES = 1
 CALIB_ADC = True
 CALIB_TIME_BASE = False
 QUIET = False
+DEBUG = True
 
 all_x = []
 all_y = []
@@ -284,6 +285,8 @@ class Acdc:
 		
 		self.sync_ch = init_data_dict['sync_ch']
 
+		self.reflect_time_offset = np.full(30, 3.3)
+
 		# strip_pos: mm, shape=(# channels,); local center positions of each strip relative to bottom of LAPPD
 		if init_data_dict['strip_pos'] is None:
 			mm_per_strip = 6.6
@@ -531,31 +534,33 @@ class Acdc:
 		organized_chs = np.argsort(mindata, axis=1)
 		opt_chs = organized_chs[:,0]
 
-		# Now we need to account for cap misfires
-		cut1 = (opt_chs != 0) & (opt_chs != 29)
-		l_opt_chs, r_opt_chs = np.copy(opt_chs), np.copy(opt_chs)
-		l_opt_chs[cut1] = l_opt_chs[cut1] - 1
-		r_opt_chs[cut1] = r_opt_chs[cut1] + 1
+		bad_channels = 50*np.ones_like(opt_chs)
 
-		mindata_opt = np.take_along_axis(mindata, opt_chs[:,np.newaxis], axis=1).flatten()
-		mindata_l_opt = np.take_along_axis(mindata, l_opt_chs[:,np.newaxis], axis=1).flatten()
-		mindata_r_opt = np.take_along_axis(mindata, r_opt_chs[:,np.newaxis], axis=1).flatten()
+		# # Now we need to account for cap misfires
+		# cut1 = (opt_chs != 0) & (opt_chs != 29)
+		# l_opt_chs, r_opt_chs = np.copy(opt_chs), np.copy(opt_chs)
+		# l_opt_chs[cut1] = l_opt_chs[cut1] - 1
+		# r_opt_chs[cut1] = r_opt_chs[cut1] + 1
 
-		cut2 = mindata_opt != 0
+		# mindata_opt = np.take_along_axis(mindata, opt_chs[:,np.newaxis], axis=1).flatten()
+		# mindata_l_opt = np.take_along_axis(mindata, l_opt_chs[:,np.newaxis], axis=1).flatten()
+		# mindata_r_opt = np.take_along_axis(mindata, r_opt_chs[:,np.newaxis], axis=1).flatten()
 
-		cut3 = (mindata_l_opt[cut2]/mindata_opt[cut2] < ratio_limit) | (mindata_r_opt[cut2]/mindata_opt[cut2] < ratio_limit)
-		bad_channels = np.copy(opt_chs)
-		opt_chs[cut2][cut3] = organized_chs[cut2][cut3][:,1]
+		# cut2 = mindata_opt != 0
+
+		# cut3 = (mindata_l_opt[cut2]/mindata_opt[cut2] < ratio_limit) | (mindata_r_opt[cut2]/mindata_opt[cut2] < ratio_limit)
+		# bad_channels = np.copy(opt_chs)
+		# opt_chs[cut2][cut3] = organized_chs[cut2][cut3][:,1]
 				
 		return mindata, opt_chs, bad_channels
 
 	def calc_positions(self, ydata_v, xdata_h, ydata_h, opt_chs, bad_chs, xdata_sine, ydata_sine, trigger_low):
 
 		max_offset = 10
-		delta_t = 0.1
-		offsets = np.arange(0, max_offset, delta_t)
+		offset_increment = 0.1
+		offsets = np.arange(0, max_offset, offset_increment)
 
-		hpos_vec = []
+		delta_t_vec = []
 		vpos_vec = []
 		phi_vec = []
 		first_peak_vec = []
@@ -581,15 +586,19 @@ class Acdc:
 			try:
 				xv = np.copy(self.strip_pos)
 
+				fig, ax = plt.subplots()
+				ax.scatter(self.strip_pos, yv, marker='.', color='black')
+				plt.show()
+
 				# Throws out misfired cap channel
 				if opt_ch != bad_ch:
 					xv = np.delete(np.copy(self.strip_pos), bad_ch)
 
 				# Finds spatial position
 				mu0 = xv[opt_ch]
-				hpos, lbound = self.calc_hpos(xh, yh, offsets)	# hpos is the difference in time between the two peaks in the waveform
+				delta_t, lbound = self.calc_delta_t(xh, yh, offsets)	# delta_t is the difference in time between the two peaks in the waveform
 				vpos = self.calc_vpos(xv, yv, mu0)
-				hpos_vec.append(hpos)
+				delta_t_vec.append(delta_t)
 				vpos_vec.append(vpos)	
 				
 				# Fits sine channel for event time reconstruction
@@ -615,15 +624,15 @@ class Acdc:
 				# 	plt.show()
 
 				# if opt_ch == 3:
-				# 	single_ch_x.append(hpos)
+				# 	single_ch_x.append(delta_t)
 				# 	single_ch_y.append(vpos)	
-				# 	# if hpos > 5.5 and hpos < 5.7 or i == 1553:
+				# 	# if delta_t > 5.5 and delta_t < 5.7 or i == 1553:
 				# if i == 1553:
 				# 	print(i)
 				# 	fig, ax = plt.subplots()
 				# 	ax.scatter(xh, yh, marker='.', color='black')
 				# 	ax.plot(xh, yh, color='black')
-				# 	# self.calc_hpos(xh, yh, offsets, debug=True)		
+				# 	# self.calc_delta_t(xh, yh, offsets, debug=True)		
 				# 	ax.scatter(xsin, ysin, marker='.', color='red')
 				# 	ax.plot(xsin, ysin, color='red')
 				# 	domain = np.linspace(0,25,500)
@@ -643,6 +652,9 @@ class Acdc:
 			except:
 				skipped += 1
 		
+		delta_t_vec = np.array(delta_t_vec)
+		hpos_vec = 0.5*self.vel*delta_t_vec - self.reflect_time_offset[opt_chs]
+
 		# fig, ax = plt.subplots()
 		# ax.hist(np.array(phi_vec)/(2*np.pi*0.25), np.linspace(-4,2,300))
 		# plt.show()
@@ -673,11 +685,10 @@ class Acdc:
 
 		return popt[2]
 	
-	def calc_hpos(self, xh, yh, offsets, debug=False):
+	def calc_delta_t(self, xh, yh, offsets, debug=False):
 		"""
 		Returns the time difference between the two peaks in the waveform.
 		"""
-
 
 		lbound, rbound = self.leading_edge_bounds(xh, yh)
 
@@ -699,19 +710,19 @@ class Acdc:
 		extrema = extrema[(extrema > peak_rough - 0.2) & (extrema < peak_rough + 0.2)]
 
 		if len(extrema) > 0:
-			hpos = extrema[bspline(extrema).argsort()][-1]
+			delta_t = extrema[bspline(extrema).argsort()][-1]
 		else:
-			hpos = peak_rough
+			delta_t = peak_rough
 
 		if debug:
 			fig, ax = plt.subplots()
 			ax.scatter(offsets, lsquares, marker='.', color='black')
 			domain = np.linspace(offsets_cut[0], offsets_cut[-1], 250)
 			ax.plot(domain, bspline(domain), color='red')
-			ax.axvline(hpos, color='green')
+			ax.axvline(delta_t, color='green')
 			plt.show()
 
-		return hpos, lbound
+		return delta_t, lbound
 
 	def leading_edge_bounds(self, xh, yh):
 
@@ -849,14 +860,11 @@ class Acdc:
 
 	def plot_centers(self):
 
-		mm_per_ns = 72
-		offset_in_ns = 3.5
-
 		fig, ax = plt.subplots()
 		fig.set_size_inches([10.5,8])
 
 		xbins, ybins = np.linspace(0,200,201), np.linspace(0,200,201)
-		h, xedges, yedges, image_mesh = ax.hist2d((self.hpos-offset_in_ns)*mm_per_ns, self.vpos, bins=(xbins, ybins))#, norm=matplotlib.colors.LogNorm())
+		h, xedges, yedges, image_mesh = ax.hist2d(self.hpos, self.vpos, bins=(xbins, ybins))#, norm=matplotlib.colors.LogNorm())
 		ax.set_xlabel("dt(pulse, reflection)*v [mm]")
 		ax.set_ylabel("Y position (perpendicular to strips) [mm]")
 		fig.colorbar(image_mesh, ax=ax)
@@ -1240,7 +1248,7 @@ if __name__=='__main__':
 		'len_cor': None,
 		'times': None,			 # xxx need a better name for this
 		'wraparound': None,
-		'vel': 72,			 # mm/ns, average (~500 MHz - 1GHz) propagation velocity of the strip 
+		'vel': 144,			 # mm/ns, average (~500 MHz - 1GHz) propagation velocity of the strip 
 		'dt': 1.0/(40e6*256)*1e9,	 # nanoseconds, nominal sampling time interval, 1/(clock to PSEC4 x number of samples)
 		# 'pedestal_data_path': r'/home/cameronpoe/Desktop/lappd_tof_container/testData/old_data/Raw_testData_20230615_164912_b0.txt',
 		'pedestal_data_path': r'/home/cameronpoe/Desktop/lappd_tof_container/testData/ped_Raw_testData_ACC1_20230714_093238_b0.txt',

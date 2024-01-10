@@ -856,8 +856,8 @@ class Acdc:
 
 	def plot_centers(self):
 
-		mm_per_ns = 72			# Cameron's note: half the propagation velocity along the strips
-		offset_in_ns = 3.5		# Cameron's note: double the length of the anode, represented in time
+		mm_per_ns = 72
+		offset_in_ns = 3.5
 
 		fig, ax = plt.subplots()
 		fig.set_size_inches([10.5,8])

@@ -584,7 +584,7 @@ class Acdc:
 				# Throws out misfired cap channel
 				if opt_ch != bad_ch:
 					xv = np.delete(np.copy(self.strip_pos), bad_ch)
-				
+
 				# Finds spatial position
 				mu0 = xv[opt_ch]
 				hpos, lbound = self.calc_hpos(xh, yh, offsets)	# hpos is the difference in time between the two peaks in the waveform
@@ -723,7 +723,7 @@ class Acdc:
 		peaks_rough = find_peaks(yh_temp, height=min_height, distance=peak_dist)[0]
 		prompt_ind, reflect_ind = np.sort(peaks_rough[yh[peaks_rough].argsort()[0:2]])
 
-		lbound = prompt_ind - 20
+		lbound = prompt_ind - 25
 		if lbound < 0:
 			lbound = 0
 		rbound = prompt_ind + 4
@@ -731,7 +731,7 @@ class Acdc:
 		subrange = yh[lbound:rbound]
 		cspline = CubicSpline(subdomain, subrange, extrapolate=False, bc_type='natural')
 
-		ymin, ymax = yh[0], yh.min()
+		ymin, ymax = yh[lbound], yh[prompt_ind]
 		lbound_y = ymin - 0.1*(ymin-ymax)
 		rbound_y = ymin - 0.9*(ymin-ymax)
 		

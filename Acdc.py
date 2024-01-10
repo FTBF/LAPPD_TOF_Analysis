@@ -273,14 +273,8 @@ def sin_const_back(x, A, omega, phi, B):
 
 class Acdc:
 	def __init__(self, init_data_dict):
-		
-		# Imports all the initialization data via a dictionary and assigns to instance variables. Right now, I'm
-		#	working with a dictionary as input and instance variables rather than a separate calibration object since 
-		#	some of the initialization data may need further processing within the Acdc object (e.g. pedestal_data_path -> 
-		#	pedestal data via import_raw_data). 
-		# 
-		# 	Also, some of the following variables may be replaced in function by some of the following variables not yet
-		#	used (e.g. voltage_count_curves will eventually replace pedestal_counts as a way to correct ADC data and convert to voltage)
+		"""
+		"""
 		
 		# Metadata
 		self.acdc_id = init_data_dict['acdc_id']			# ACDC number (see inventory), e.g. '46'
@@ -354,12 +348,6 @@ class Acdc:
 
 		if not QUIET:
 			print(f'ACDC intialized\n  ACDC:    {self.acdc_id}\n  LAPPD:   {self.lappd_id}\n  ACC:     {self.acc_id}\n  Station: {self.station_id}\n')
-
-	def import_ped_data(self):
-
-		self.import_raw_data(self.ped_data_path, is_pedestal_data=True)
-
-		return
 
 	def import_raw_data(self, raw_data_path, is_pedestal_data=False):
 		"""Imports binary LAPPD data into ACDC object.
@@ -460,14 +448,19 @@ class Acdc:
 				vccs[:,:,1] = -vccs[:,:,1]/vccs[:,:,0]
 				vccs[:,:,0] = 1/vccs[:,:,0]
 
-				self.vccs = vccs
-
 				if not QUIET:
 					print('ACDC voltage calibrated with VCCs')
 		
 		else:
+
+			self.import_raw_data(self.ped_data_path, is_pedestal_data=True)
+			vccs = np.ones((30,256,2))
+			vccs[:,:,1] = -1*np.copy(self.pedestal_counts)
+
 			if not QUIET:
 				print('ACDC ADC counts calibrated with pedestal data')
+
+		self.vccs = vccs
 
 		if CALIB_TIME_BASE:
 			# Creates a time-base calibrated array of sample times
@@ -1299,9 +1292,6 @@ if __name__=='__main__':
 		]
 
 	test_acdc = Acdc(init_dict62)
-
-	if not CALIB_ADC:
-		test_acdc.import_ped_data()
 
 	test_acdc.calibrate_board()
 	

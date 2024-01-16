@@ -286,6 +286,7 @@ class Acdc:
 		self.sync_ch = init_data_dict['sync_ch']
 
 		self.reflect_time_offset = np.full(30, 3.3)
+		self.wr_calib_offset = np.full(30, 2)
 
 		# strip_pos: mm, shape=(# channels,); local center positions of each strip relative to bottom of LAPPD
 		if init_data_dict['strip_pos'] is None:
@@ -500,6 +501,7 @@ class Acdc:
 
 		# Adjusts trigger position
 		trigger_low = (((times_320+2+2)%8)*32-16)%256
+		trigger_low = np.zeros_like(opt_chs)
 		
 		num_events = trigger_low.shape[0]
 
@@ -554,7 +556,7 @@ class Acdc:
 				
 		return mindata, opt_chs, bad_channels
 
-	def calc_positions(self, ydata_v, xdata_h, ydata_h, opt_chs, bad_chs, xdata_sine, ydata_sine, trigger_low):
+	def calc_positions(self, ydata_v, xdata_h, ydata_h, opt_chs, bad_chs, xdata_sine, ydata_sine, trigger_low, times):
 
 		max_offset = 10
 		offset_increment = 0.1
@@ -568,7 +570,7 @@ class Acdc:
 		single_ch_x = []
 		single_ch_y = []
 
-		# Restricting sin data bounds to exclude trigger position discontinuity
+		# Restricting sin data bounds to exclude trigger samples
 		sin_lbound, sin_rbound = int(4*(256/25)), int(21*(256/25))
 		cut = np.linspace(sin_lbound, sin_rbound, sin_rbound-sin_lbound+1, dtype=int)
 		xdata_sine, ydata_sine = xdata_sine[:,cut], ydata_sine[:,cut]
@@ -581,28 +583,29 @@ class Acdc:
 		p0_array = np.array([A0, omega0, phi0, B0]).T
 		
 		t1 = process_time()
-		skipped = 0
+		skipped = []
 		for i, (yv, xh, yh, opt_ch, bad_ch, xsin, ysin, p0, tl) in enumerate(zip(ydata_v, xdata_h, ydata_h, opt_chs, bad_chs, xdata_sine, ydata_sine, p0_array, trigger_low)):
 			try:
 				xv = np.copy(self.strip_pos)
 
-				fig, ax = plt.subplots()
-				ax.scatter(self.strip_pos, yv, marker='.', color='black')
-				plt.show()
+				# fig, ax = plt.subplots()
+				# ax.scatter(xsin, ysin, marker='.', color='black')
+				# plt.show()
 
 				# Throws out misfired cap channel
-				if opt_ch != bad_ch:
-					xv = np.delete(np.copy(self.strip_pos), bad_ch)
+				# if opt_ch != bad_ch:
+				# 	xv = np.delete(np.copy(self.strip_pos), bad_ch)
 
 				# Finds spatial position
 				mu0 = xv[opt_ch]
 				delta_t, lbound = self.calc_delta_t(xh, yh, offsets)	# delta_t is the difference in time between the two peaks in the waveform
 				vpos = self.calc_vpos(xv, yv, mu0)
-				delta_t_vec.append(delta_t)
-				vpos_vec.append(vpos)	
 				
 				# Fits sine channel for event time reconstruction
 				popt, pcov = curve_fit(sin_const_back, xsin, ysin, p0=p0)
+
+				delta_t_vec.append(delta_t)
+				vpos_vec.append(vpos)	
 				phi_vec.append(popt[2])
 				first_peak_vec.append(lbound)
 
@@ -650,27 +653,23 @@ class Acdc:
 				# 	plt.show()
 				
 			except:
-				skipped += 1
+				skipped.append(i)				
 		
-		delta_t_vec = np.array(delta_t_vec)
-		hpos_vec = 0.5*self.vel*delta_t_vec - self.reflect_time_offset[opt_chs]
+		num_skipped = len(skipped)
 
-		# fig, ax = plt.subplots()
-		# ax.hist(np.array(phi_vec)/(2*np.pi*0.25), np.linspace(-4,2,300))
-		# plt.show()
+		delta_t_vec = np.array(delta_t_vec)
+		first_peak_vec = np.array(first_peak_vec)
+		hpos_vec = 0.5*self.vel*delta_t_vec - np.delete(self.reflect_time_offset[opt_chs], skipped)
 
 		phi_vec = np.array(phi_vec)%(2*np.pi)
 		phi_vec = phi_vec/(2*np.pi*0.25)
-
-		# fig, ax = plt.subplots()
-		# ax.hist(phi_vec, bins = np.linspace(0,4,200))
-		# plt.show()
+		times_calibrated = np.delete(times, skipped) - np.delete(xdata_h[:,255], skipped) + first_peak_vec - phi_vec + delta_t_vec + np.delete(self.wr_calib_offset[opt_chs], skipped)
 
 		t2 = process_time()
 
 		# print(t2-t1)
 
-		return hpos_vec, vpos_vec, skipped, single_ch_x, single_ch_y
+		return hpos_vec, vpos_vec, times_calibrated, num_skipped, single_ch_x, single_ch_y
 
 	def calc_vpos(self, xv, yv, mu0):
 
@@ -826,9 +825,8 @@ class Acdc:
 	def process_single_file(self, file_name):
 		times_320, times, data_raw = self.import_raw_data(file_name)
 		preprocess_vec = self.preprocess_data(data_raw, times_320)
-		hpos, vpos, skipped, single_ch_x, single_ch_y = self.calc_positions(*preprocess_vec)
-		exit()
-		return hpos, vpos, skipped, single_ch_x, single_ch_y
+		hpos, vpos, times_calibrated, num_skipped, single_ch_x, single_ch_y = self.calc_positions(*preprocess_vec, times)
+		return hpos, vpos, times_calibrated, num_skipped, single_ch_x, single_ch_y
 
 	def process_files(self, file_list):
 
@@ -838,19 +836,19 @@ class Acdc:
 				file_list = convert_to_list(file_list)
 				rv = p.map(self.process_single_file, file_list)
 
-			for hpos, vpos, skipped, single_ch_x, single_ch_y in rv:
+			for hpos, vpos, num_skipped, single_ch_x, single_ch_y in rv:
 				hpos_vec.extend(hpos)
 				vpos_vec.extend(vpos)
 				all_x.extend(single_ch_x)
 				all_y.extend(single_ch_y)
-				total_skipped += skipped
+				total_skipped += num_skipped
 
 		else:
 			for file_name in file_list:
-				hpos, vpos, skipped = self.process_single_file(file_name)
+				hpos, vpos, num_skipped = self.process_single_file(file_name)
 				hpos_vec.extend(hpos)
 				vpos_vec.extend(vpos)
-				total_skipped += skipped
+				total_skipped += num_skipped
 
 		print(f'Total skipped: {round(100*total_skipped/(len(file_list)*10000.),2)}%')
 

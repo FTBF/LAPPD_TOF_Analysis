@@ -15,7 +15,7 @@ from time import process_time
 from multiprocessing import Pool
 import numba
 
-MAX_PROCESSES = 1
+MAX_PROCESSES = 3
 CALIB_ADC = True
 CALIB_TIME_BASE = False
 QUIET = False
@@ -452,6 +452,8 @@ class Acdc:
 				vccs[:,:,1] = -vccs[:,:,1]/vccs[:,:,0]
 				vccs[:,:,0] = 1/vccs[:,:,0]
 
+				vccs = vccs[self.chan_rearrange,:]
+
 				if not QUIET:
 					print('ACDC voltage calibrated with VCCs')
 		
@@ -492,7 +494,7 @@ class Acdc:
 		# Calibrates the ADC data
 		data_raw = data_raw[:,self.chan_rearrange,:]
 		if CALIB_ADC:
-			data = self.vccs[:,:,0]*data_raw[:,self.chan_rearrange,:] + self.vccs[:,:,1]
+			data = self.vccs[:,:,0]*data_raw[:,:,:] + self.vccs[:,:,1]
 		else:
 			data = data_raw - self.pedestal_counts
 
@@ -589,7 +591,8 @@ class Acdc:
 				xv = np.copy(self.strip_pos)
 
 				# fig, ax = plt.subplots()
-				# ax.scatter(xsin, ysin, marker='.', color='black')
+				# ax.scatter(self.strip_pos, yv, marker='.', color='black')
+				# ax.plot(self.strip_pos, yv, color='black')
 				# plt.show()
 
 				# Throws out misfired cap channel
@@ -659,7 +662,7 @@ class Acdc:
 
 		delta_t_vec = np.array(delta_t_vec)
 		first_peak_vec = np.array(first_peak_vec)
-		hpos_vec = 0.5*self.vel*delta_t_vec - np.delete(self.reflect_time_offset[opt_chs], skipped)
+		hpos_vec = 0.5*self.vel*(delta_t_vec - np.delete(self.reflect_time_offset[opt_chs], skipped))
 
 		phi_vec = np.array(phi_vec)%(2*np.pi)
 		phi_vec = phi_vec/(2*np.pi*0.25)
@@ -836,7 +839,7 @@ class Acdc:
 				file_list = convert_to_list(file_list)
 				rv = p.map(self.process_single_file, file_list)
 
-			for hpos, vpos, num_skipped, single_ch_x, single_ch_y in rv:
+			for hpos, vpos, times_calibrated, num_skipped, single_ch_x, single_ch_y in rv:
 				hpos_vec.extend(hpos)
 				vpos_vec.extend(vpos)
 				all_x.extend(single_ch_x)
@@ -868,7 +871,7 @@ class Acdc:
 		fig.colorbar(image_mesh, ax=ax)
 
 		fig2, ax2 = plt.subplots()
-		ax2.hist(self.hpos, np.linspace(3.5, 6.5, 400))
+		ax2.hist(self.hpos, np.linspace(110, 180))
 		
 		plt.show()
 
@@ -1266,7 +1269,7 @@ if __name__=='__main__':
 		'len_cor': None,
 		'times': None,			 # xxx need a better name for this
 		'wraparound': None,
-		'vel': 72,			 # mm/ns, average (~500 MHz - 1GHz) propagation velocity of the strip 
+		'vel': 144,			 # mm/ns, average (~500 MHz - 1GHz) propagation velocity of the strip 
 		'dt': 1.0/(40e6*256)*1e9,	 # nanoseconds, nominal sampling time interval, 1/(clock to PSEC4 x number of samples)
 		# 'pedestal_data_path': r'/home/cameronpoe/Desktop/lappd_tof_container/testData/old_data/Raw_testData_20230615_164912_b0.txt',
 		'pedestal_data_path': r'/home/cameronpoe/Desktop/lappd_tof_container/testData/ped_Raw_testData_ACC1_20230714_093238_b0.txt',
@@ -1304,6 +1307,8 @@ if __name__=='__main__':
 	test_acdc.process_files(file_list)
 
 	test_acdc.plot_centers()
+
+	exit()
 
 	fig, ax = plt.subplots()
 	bins = np.linspace(3.5,6.5,400)

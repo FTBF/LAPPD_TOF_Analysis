@@ -15,11 +15,15 @@ from time import process_time
 from multiprocessing import Pool
 import numba
 
-MAX_PROCESSES = 3
+MAX_PROCESSES = 1
 CALIB_ADC = True
 CALIB_TIME_BASE = False
 QUIET = False
 DEBUG = True
+
+# Globals for debugging purposes only
+all_xh = []
+all_yh = []
 
 all_x = []
 all_y = []
@@ -522,6 +526,15 @@ class Acdc:
 		ydata_sine = np.take_along_axis(data, optchs_sine[:,np.newaxis,np.newaxis], axis=1).reshape(num_events, 256)
 		ydata_sine = np.array([np.roll(np.copy(ydata_sine[i,:]), -trigger_low[i]) for i in range(num_events)])
 
+		if DEBUG:
+			global all_xh
+			global all_yh
+			all_xh = np.repeat(np.copy(self.time_base)[np.newaxis,:,:], num_events, axis=0)
+			all_xh = np.array([np.roll(np.copy(all_xh[i,:,:]), -trigger_low[i], axis=0) for i in range(num_events)])
+			all_xh = np.roll(all_xh, 1, axis=2)
+			all_xh = np.cumsum(all_xh, axis=2)
+			all_yh = np.array([np.roll(np.copy(data[i,:,:]), -trigger_low[i], axis=1) for i in range(num_events)])
+
 		return ydata_v, xdata_h, ydata_h, opt_chs, bad_chs, xdata_sine, ydata_sine, trigger_low
 
 	def v_data_opt_ch(self, data):
@@ -590,10 +603,18 @@ class Acdc:
 			try:
 				xv = np.copy(self.strip_pos)
 
-				# fig, ax = plt.subplots()
-				# ax.scatter(self.strip_pos, yv, marker='.', color='black')
-				# ax.plot(self.strip_pos, yv, color='black')
-				# plt.show()
+				# # if i == 118 or i == 122 or i == 260 or i == 5419 or i == 6428 or i == 7258:
+				# if i == 7258:
+				# 	print(i)
+				# 	fig, ax = plt.subplots()
+				# 	ax.scatter(xv, yv, marker='.', color='black')
+				# 	ax.plot(xv, yv, color='black')
+				# 	plt.show()
+
+				# 	fig, ax = plt.subplots()
+				# 	ax.scatter()
+
+				# continue
 
 				# Throws out misfired cap channel
 				# if opt_ch != bad_ch:
@@ -601,16 +622,26 @@ class Acdc:
 
 				# Finds spatial position
 				mu0 = xv[opt_ch]
-				delta_t, lbound = self.calc_delta_t(xh, yh, offsets)	# delta_t is the difference in time between the two peaks in the waveform
+				# delta_t, lbound = self.calc_delta_t(xh, yh, offsets)	# delta_t is the difference in time between the two peaks in the waveform
 				vpos = self.calc_vpos(xv, yv, mu0)
 				
 				# Fits sine channel for event time reconstruction
-				popt, pcov = curve_fit(sin_const_back, xsin, ysin, p0=p0)
+				# popt, pcov = curve_fit(sin_const_back, xsin, ysin, p0=p0)
+
+				popt = [1,2,3,4,5,6]
+				delta_t, lbound = 1, 1
 
 				delta_t_vec.append(delta_t)
 				vpos_vec.append(vpos)	
 				phi_vec.append(popt[2])
 				first_peak_vec.append(lbound)
+
+				# if vpos > 75:
+				# 	print('Event: ' + str(i))
+				# 	fig, ax = plt.subplots()
+				# 	ax.scatter(xv, yv, marker='.', color='black')
+				# 	ax.plot(xv, yv, color='black')
+				# 	plt.show()
 
 				# if (popt[2])/(2*np.pi*0.25) < -3:
 				# # if (popt[2]%(2*np.pi))/(2*np.pi*0.25) > 3.8:
@@ -655,8 +686,25 @@ class Acdc:
 				# 	plt.minorticks_on()
 				# 	plt.show()
 				
-			except:
-				skipped.append(i)				
+			except Exception as err:
+				skipped.append(i)	
+				if DEBUG:
+					print(i)
+					fig, ax = plt.subplots()
+					ax.scatter(xv, yv, marker='.', color='black')
+					ax.plot(xv, yv, color='black')
+
+					fig2, ax2 = plt.subplots()
+					for j in range(30):
+						print(all_xh.shape)
+						print(all_yh.shape)
+						print(i)
+						print(j)
+						ax2.plot(all_xh[i,j,:], all_yh[i,j,:])
+
+					plt.show()
+					
+					# raise err			
 		
 		num_skipped = len(skipped)
 
@@ -853,7 +901,8 @@ class Acdc:
 				vpos_vec.extend(vpos)
 				total_skipped += num_skipped
 
-		print(f'Total skipped: {round(100*total_skipped/(len(file_list)*10000.),2)}%')
+		print(f'Total skipped: {round(100.*total_skipped/(total_skipped + len(hpos_vec)),2)}%')
+		print(f'Total events analyzed: {total_skipped + len(hpos_vec)}')
 
 		self.hpos = np.array(hpos_vec)
 		self.vpos = np.array(vpos_vec)
@@ -863,7 +912,6 @@ class Acdc:
 
 		fig, ax = plt.subplots()
 		fig.set_size_inches([10.5,8])
-
 		xbins, ybins = np.linspace(0,200,201), np.linspace(0,200,201)
 		h, xedges, yedges, image_mesh = ax.hist2d(self.hpos, self.vpos, bins=(xbins, ybins))#, norm=matplotlib.colors.LogNorm())
 		ax.set_xlabel("dt(pulse, reflection)*v [mm]")
@@ -871,7 +919,14 @@ class Acdc:
 		fig.colorbar(image_mesh, ax=ax)
 
 		fig2, ax2 = plt.subplots()
-		ax2.hist(self.hpos, np.linspace(110, 180))
+		fig2.set_size_inches([10.5,8])
+		h, xedges, yedges, image_mesh = ax2.hist2d(self.hpos, self.vpos, bins=(xbins, ybins), norm=colors.LogNorm())
+		ax2.set_xlabel("dt(pulse, reflection)*v [mm]")
+		ax2.set_ylabel("Y position (perpendicular to strips) [mm]")
+		fig2.colorbar(image_mesh, ax=ax2)
+
+		fig3, ax3 = plt.subplots()
+		ax3.hist(self.hpos, np.linspace(90, 200))
 		
 		plt.show()
 
@@ -1281,14 +1336,14 @@ if __name__=='__main__':
 
 	file_list = [
 		r'testData/Raw_testData_ACC1_20230714_094355_b0.txt',
-		r'testData/Raw_testData_ACC1_20230714_094508_b0.txt',
-		r'testData/Raw_testData_ACC1_20230714_094640_b0.txt',
-		r'testData/Raw_testData_ACC1_20230714_094737_b0.txt',
-    	r'testData/Raw_testData_ACC1_20230714_094940_b0.txt',
-    	r'testData/Raw_testData_ACC1_20230714_095032_b0.txt',
-		r'testData/Raw_testData_ACC1_20230714_095229_b0.txt',
-    	r'testData/Raw_testData_ACC1_20230714_095300_b0.txt',
-    	r'testData/Raw_testData_ACC1_20230714_095543_b0.txt',
+		# r'testData/Raw_testData_ACC1_20230714_094508_b0.txt',
+		# r'testData/Raw_testData_ACC1_20230714_094640_b0.txt',
+		# r'testData/Raw_testData_ACC1_20230714_094737_b0.txt',
+    	# r'testData/Raw_testData_ACC1_20230714_094940_b0.txt',
+    	# r'testData/Raw_testData_ACC1_20230714_095032_b0.txt',
+		# r'testData/Raw_testData_ACC1_20230714_095229_b0.txt',
+    	# r'testData/Raw_testData_ACC1_20230714_095300_b0.txt',
+    	# r'testData/Raw_testData_ACC1_20230714_095543_b0.txt',
 		# r'testData/Raw_testData_ACC2_20230714_091716_b0.txt',
 		# r'testData/Raw_testData_ACC2_20230714_091928_b0.txt',
 		# r'testData/Raw_testData_ACC2_20230714_091957_b0.txt',

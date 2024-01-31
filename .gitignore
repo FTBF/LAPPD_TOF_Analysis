@@ -1,4 +1,5 @@
 testData/*
+calib/*
 configs/0/*
 *.pyc
 Analysis.ipynb

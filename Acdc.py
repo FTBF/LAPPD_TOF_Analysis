@@ -14,6 +14,11 @@ from pylandau import langau_pdf
 from time import process_time, time
 from multiprocessing import Pool
 import numba
+import yaml
+try:
+    from yaml import CLoader as Loader, CDumper as Dumper
+except ImportError:
+    from yaml import Loader, Dumper
 
 MAX_PROCESSES = 1
 CALIB_ADC = True
@@ -280,83 +285,57 @@ def sin_const_back(x, A, omega, phi, B):
 #on an event by event basis but all else (configs, etc) are kept the same. 
 
 class Acdc:
-	def __init__(self, init_data_dict):
+	def __init__(self, config_data):
+		"""Initializes based on a python dict or a yaml file
 		"""
-		"""
-		
+
+		if isinstance(config_data, str):
+			try:
+				with open('configs/' + config_data, 'r') as yf:
+					config_data = yaml.safe_load(yf)
+			except FileNotFoundError:
+				print(f'{config_data} doesn\'t exist in the `configs/` directory')
+				exit()
+		elif not isinstance(config_data, dict):
+			print(f'`config_data` file-type not recognized: {type(config_data)}')
+			exit()
+				
 		# Metadata
-		self.acdc_id = init_data_dict['acdc_id']			# ACDC number (see inventory), e.g. '46'
-		self.lappd_id = init_data_dict['lappd_id']			# Incom manufacturing number, e.g. '125'
-		self.acc_id = init_data_dict['acc_id']				# ACC nmber (see inventory), e.g. '1'
-		self.station_id = init_data_dict['station_id']		# station position, e.g. '1'
-		
-		self.sync_ch = init_data_dict['sync_ch']
-
-		self.reflect_time_offset = np.full(30, 3.3)
-		self.wr_calib_offset = np.full(30, 2)
-
-		# strip_pos: mm, shape=(# channels,); local center positions of each strip relative to bottom of LAPPD
-		if init_data_dict['strip_pos'] is None:
-			mm_per_strip = 6.6
-			self.strip_pos = mm_per_strip*np.linspace(0,29,30)	
-		else:		
-			self.strip_pos = init_data_dict['strip_pos']	
-
-		self.len_cor = init_data_dict['len_cor']			# mm, shape=(# channels,); a correction on the length of the strip + PCB traces per strip
-		self.chan_rearrange = np.array([5,4,3,2,1,0,11,10,9,8,7,6,17,16,15,14,13,12,23,22,21,20,19,18,29,28,27,26,25,24])
-
-		# I am overriding this as self.sample_times, which I initialize to None. Will need to go back in and figure this stuff out when we know if the init_data_dict is even gonna have an option to sepcify the sample_times
-		self.times = init_data_dict['times']				# ps, xxx need better variable name and also better description imo; a list of timebase calibrated times
-		self.sample_times = []
-
-		self.wraparound = init_data_dict['wraparound']		# ps, shape=(# channels,);  a constant time associated with the delay for when the VCDL goes from the 255th cap to the 0th cap
-		self.vel = init_data_dict['vel']					# mm/ps; average (~500 MHz - 1GHz) propagation velocity of the strip
-		self.dt = init_data_dict['dt']						# ps; nominal sampling time interval, 1/(clock to PSEC4 x number of samples)
-
-		# self.pedestal_counts = init_data_dict['pedestal_counts']	# ADC count; a list of 256 integers, which corresponds to each capicitors of VCDL.
-		self.pedestal_voltage = init_data_dict['pedestal_voltage']
-		self.vccs = init_data_dict['voltage_count_curves']
-		self.calib_data_file_path = init_data_dict['calib_data_file_path']
+		self.acdc_id = config_data['acdc_id']			# ACDC number (see inventory), e.g. '46'
+		self.lappd_id = config_data['lappd_id']			# Incom manufacturing number, e.g. '125'
+		self.acc_id = config_data['acc_id']				# ACC nmber (see inventory), e.g. '1'
+		self.station_id = config_data['station_id']		# station position, e.g. '1'
+		self.sync_ch = config_data['sync_ch']
 
 		# Pedestal related
-		self.ped_data_path = init_data_dict['pedestal_data_path']
+		self.ped_data_path = config_data['pedestal_file_name']
 		self.pedestal_data = None
 		self.pedestal_counts = None
 
-		self.cur_times, self.cur_times_320, self.cur_waveforms_raw, self.cur_waveforms = None, None, None, None
+		# Calibration related
+		self.calib_data_file_path = config_data['calib_file_name']
+		self.vccs = None
+		self.reflect_time_offset = np.full(30, 3.3)
+		self.wr_calib_offset = np.full(30, 2)
+		self.strip_pos = 6.6*np.linspace(0,29,30)	
 
-		self.hpos, self.vpos = None, None
+		# Constants
+		self.chan_rearrange = np.array([5,4,3,2,1,0,11,10,9,8,7,6,17,16,15,14,13,12,23,22,21,20,19,18,29,28,27,26,25,24])
+		self.vel = 144.
+
+		# Input data
+		self.times = None
+		self.times_320 = None
+		self.waveforms_raw =None
+
+		# Derived data
+		self.waveforms = None
+		self.hpos = None
+		self.vpos = None	
+
+		# self.pedestal_counts = init_data_dict['pedestal_counts']	# ADC count; a list of 256 integers, which corresponds to each capicitors of VCDL.
+		# self.pedestal_voltage = init_data_dict['pedestal_voltage']
 		
-
-		# Everything below is leftover, but will kept because a) still need to incorporate some and b) for posterity's sake until I'm sure we can delete
-
-		#"ch": channel number, preferentially matches ACDC data output channel number please. (0, 1, ...)
-		#the ACDCs do not have a constant sampling rate, like in self.dt. Instead, each sample
-		#has its time relative to the last sample calibrated and stored in a calibration file. 
-
-		#PLEASE VALIDATE!? -JIN- Each capacitor of the VCDL will carry slightly different number of charges even when we feed the entire ring buffer with a 0.0v DC signal.
-		#As a result, systemic(non-random) fluctuation is visible at the each sample of raw waveforms. We say that each capacitor has a characteristic 'pedestal' ADC count, which stays effectively constant during an entire analysis.
-		#baseline_subtract() function removes the formentioned systemic error from the current waveform by subtracting each pedestal ADC counts from the corresponding samples. 
-		#"pedestal_counts": ADC count, a list of 256 integers, which corresponds to each capicitors of VCDL.
-
-		#DO WE NEED 'pedestal_counts'? ISN'T 'voltage_count_curve' A SUPERSET OF 'pedestal_counts'? -JIN-
-		#ADC counts do not exactly 'measure' the input voltage, in the sense that each capacitor of the VCDL does not charge completely linearly with the input voltage.
-		#Thus the 'voltage-ADC count' curve is measured for each capacitor, and we also consider this as a characteristic curve of the capacitor.
-		#voltage_linearization() function reconstructs actual voltage waveform from ADC count waveform utilizing inverse function theorem(??? -JIN)
-		#"voltage_count_curves": 256(# of capacitors)*[[voltage, ADC count]*(# of measurement points)], # of measurement points typically being 256.
-		#one channel is special, used for synchronization, so we keep it separate 
-		self.sync_dict = {"ch": self.sync_ch, "waveform": None, "times": None, "wraparound": None} #similar columns as df, currently hard coding the sync channel as "0"
-
-		#metadata dictionary from the loader of the raw files, holds clock/counter information
-		self.cur_times = 0 #s, timestamp of the currently loaded waveform
-		self.cur_times_320 = 0 #clock cycles, timestamp of the currently loaded waveform
-		self.cur_event_count = 0 #event count of the currently loaded waveform
-		self.event_numbers = [] #list of event numbers, in order, for the currently loaded waveform.
-		
-		# self.calibration_fn = calibration_fn #location of config file
-		# commented below out - cameron
-		# self.load_calibration() #will load default values if no calibration file provided. clear indicates we want a fresh dataframe
-
 		if not QUIET:
 			print(f'ACDC intialized\n  ACDC:    {self.acdc_id}\n  LAPPD:   {self.lappd_id}\n  ACC:     {self.acc_id}\n  Station: {self.station_id}\n')
 
@@ -444,22 +423,49 @@ class Acdc:
 				voltage_counts[:,:,:,0] = voltage_counts[:,:,:,0]*1.2/4096.
 
 				# Filter the data and make it monotonically increasing
-				voltage_counts[:,:,:,1] = savgol_filter(voltage_counts[:,:,:,1], 41, 2, axis=2)	
+				voltage_counts[:,:,:,1] = savgol_filter(voltage_counts[:,:,:,1], 41, 2, axis=2)
 				reorder = np.argsort(voltage_counts[:,:,:,0], axis=2)
 				voltage_counts = np.take_along_axis(voltage_counts, reorder[:,:,:,np.newaxis], axis=2)
 
-				# First finds the linear regression for ADC v. Voltage
-				subregion = np.linspace(60,196,137,dtype=int)
-				xvals = voltage_counts[0,0,subregion,0]
-				yvals = np.reshape(voltage_counts[:,:,subregion,1], (30*256,len(subregion))).T
-				A = np.vstack([xvals, np.ones(len(xvals))]).T
-				vccs = np.linalg.lstsq(A, yvals, rcond=None)[0].T.reshape(30,256,2)
-				
-				# Now we have to invert the slope/y-intercepts (vccs)
-				vccs[:,:,1] = -vccs[:,:,1]/vccs[:,:,0]
-				vccs[:,:,0] = 1/vccs[:,:,0]
+				# data = np.zeros_like(data_raw, dtype=np.float64)
+				vccs = [[None]*256]*30
+				for ch in range(0, 30):
+					for cap in range(0, 256):
 
-				vccs = vccs[self.chan_rearrange,:]
+						tck = splrep(voltage_counts[ch, cap, :, 1], voltage_counts[ch, cap, :, 0])
+						print(tck)
+						single_bspline = BSpline(*tck)
+						vccs[ch][cap] = single_bspline
+
+						fig, ax = plt.subplots()
+						ax.scatter(voltage_counts[ch, cap, :, 1], voltage_counts[ch, cap, :, 0], marker='.', color='black')
+						ax.plot(voltage_counts[ch, cap, :, 1], voltage_counts[ch, cap, :, 0], color='black')
+						fig_domain = np.linspace(voltage_counts[ch,cap,:,1].min(), voltage_counts[ch,cap,:,1].max(), 500)
+						print(single_bspline(fig_domain))
+						ax.plot(fig_domain, single_bspline(fig_domain), color='red')
+						plt.show()
+
+
+					pass
+
+
+				# # Filter the data and make it monotonically increasing
+				# voltage_counts[:,:,:,1] = savgol_filter(voltage_counts[:,:,:,1], 41, 2, axis=2)	
+				# reorder = np.argsort(voltage_counts[:,:,:,0], axis=2)
+				# voltage_counts = np.take_along_axis(voltage_counts, reorder[:,:,:,np.newaxis], axis=2)
+
+				# # First finds the linear regression for ADC v. Voltage
+				# subregion = np.linspace(60,196,137,dtype=int)
+				# xvals = voltage_counts[0,0,subregion,0]
+				# yvals = np.reshape(voltage_counts[:,:,subregion,1], (30*256,len(subregion))).T
+				# A = np.vstack([xvals, np.ones(len(xvals))]).T
+				# vccs = np.linalg.lstsq(A, yvals, rcond=None)[0].T.reshape(30,256,2)
+				
+				# # Now we have to invert the slope/y-intercepts (vccs)
+				# vccs[:,:,1] = -vccs[:,:,1]/vccs[:,:,0]
+				# vccs[:,:,0] = 1/vccs[:,:,0]
+
+				# vccs = vccs[self.chan_rearrange,:]
 
 				if not QUIET:
 					print('ACDC voltage calibrated with VCCs')
@@ -994,37 +1000,6 @@ class Acdc:
 
 		return
 
-	def save_data_npz(self, file_name, directory_path=None):
-		"""Saves current sample times, sample times (320 clock), raw waveform, calibrated waveform, and uncalibrated sample times
-		xxx		
-		"""
-
-		if directory_path is None:
-			directory_path = os.path.dirname(os.path.realpath(__file__))
-
-		if directory_path[-1] != r'/':
-			directory_path += r'/'
-
-		print(f'Saving data to \'{directory_path + file_name}\'')		
-		np.savez(directory_path + file_name, cur_times=np.copy(self.cur_times), cur_times_320=np.copy(self.cur_times_320), cur_waveforms_raw=np.copy(self.cur_waveforms_raw), cur_waveforms=np.copy(self.cur_waveforms), sample_times=np.copy(self.sample_times))
-
-		return
-	
-	def load_data_npz(self, file_path):
-
-		print(f'Loading data from {file_path}')
-		data_array = np.load(file_path)
-
-		self.cur_times = data_array['cur_times']
-		self.cur_times_320 = data_array['cur_times_320']
-		self.cur_waveforms_raw = data_array['cur_waveforms_raw']
-		self.cur_waveforms = data_array['cur_waveforms']
-		self.sample_times = data_array['sample_times']
-
-		print('Successfully loaded!')
-
-		return
-
 	def index_to_time(self, index, times):
 		"""Implements quick index-to-time using linear interpolation (add more xxx)"""
 
@@ -1266,59 +1241,6 @@ class Acdc:
 
 		return centers
 	
-	#the calibration file is an .h5 file that holds a pandas dataframe
-	#that has the same dataframe structure as is listed above for self.df. 
-	#The one difference for simplicity is that the self.sync_dict is contained
-	#within this dataframe and is identified by a "sync" flag of 0 or 1
-	def load_calibration(self, clear=False):
-		if(clear):
-			self.initialize_dataframe()
-
-		if(self.calibration_fn is None):
-			print("No configuration file selected on initializing Acdc objects, using default values")
-			chs = range(30)
-			strip_space = 6.9 #mm
-			for ch in chs:
-				if(ch == self.sync_ch):
-					self.sync_dict["times"] = np.append(np.linspace(0, 255*self.dt, 255), 500) #picoseconds, timebase for each sample, 500ps is the wraparound time
-					continue 
-				
-				#edit the entries of the channel
-				self.df.at[ch, "waveform"] = None #load in on event loop 
-				self.df.at[ch, "position"] = strip_space*ch
-				self.df.at[ch, "len_cor"] = 0
-				self.df.at[ch, "time_offsets"] = np.append(np.linspace(0, 255*self.dt, 255), 500) #picoseconds, timebase for each sample, 500ps is the wraparound time
-				self.df.at[ch, "voltage_count_curves"] = [0,0]*256
-
-		#otherwise, if a calibration file is included, use it
-		else:
-			c = pd.read_hdf(self.calibration_fn) #this is an .h5 file that contains an empty dataframe but with calibration parameters
-			#this will check that the columns in the calibration
-			#file are also the columns of the present class definitions DF
-			check_cols = self.columns + ["sync"]
-			if(c.columns != check_cols):
-				print("Columns in calibration file are: ", end='')
-				print(c.columns)
-				print("Was expecting: ",end='')
-				print(check_cols)
-				print("Loading calibration may fail... trying anyway")
-
-			#handle the synchronization channel first
-			sync_row = c[c['sync'] == 1] #selects only the row where sync == 1
-			self.sync_dict["ch"] = sync_row["ch"]
-			self.sync_dict["times"] = sync_row["times"]
-			self.sync_dict["wraparound"] = sync_row["wraparound"]
-
-			#grab the channels that are not sync
-			ch_df = c[c['sync'] != 1]
-			#drop the "sync" column entirely
-			ch_df = ch_df.drop("sync", axis=1)
-			#now this calibration dict is identical to a "waveform empty" self.df
-			self.df = ch_df 
-
-		print("Calibration loaded for ACDC {:d} in LAPPD station {:d} with LAPPD ID {:d}".format(self.id, self.lappd_station, self.lappd_id))
-
-
 	#a function used by the datafile parser to update the ACDC class on an event by event basis
 	#without re-updating all of the globally constant calibration data.
 	#"waves" is a dictionary of np.arrays like waves[ch] = np.array(waveform samples)
@@ -1356,7 +1278,7 @@ class Acdc:
 if __name__=='__main__':
 
 	# initialization dictionary
-	init_dict52 = {
+	config52 = {
 		'acdc_id': 52,
 		'lappd_id': 128,
 		'acc_id': 2,
@@ -1369,14 +1291,14 @@ if __name__=='__main__':
 		'vel': 144,			 # mm/ns, average (~500 MHz - 1GHz) propagation velocity of the strip 
 		'dt': 1.0/(40e6*256)*1e9,	 # nanoseconds, nominal sampling time interval, 1/(clock to PSEC4 x number of samples)
 		# 'pedestal_data_path': r'/home/cameronpoe/Desktop/lappd_tof_container/testData/old_data/Raw_testData_20230615_164912_b0.txt',
-		'pedestal_data_path': r'/home/cameronpoe/Desktop/lappd_tof_container/testData/ped_Raw_testData_ACC1_20230714_093238_b0.txt',
+		'pedestal_file_name': r'/home/cameronpoe/Desktop/lappd_tof_container/testData/ped_Raw_testData_ACC1_20230714_093238_b0.txt',
 		'pedestal_counts': None,
 		'pedestal_voltage': None,
 		'voltage_count_curves': None,
 		'calib_data_file_path': r'testData/acdc52.root',
 	}
 
-	init_dict62 = {
+	config62 = {
 		'acdc_id': 62,
 		'lappd_id': 157,
 		'acc_id': 1,
@@ -1389,12 +1311,14 @@ if __name__=='__main__':
 		'vel': 144,			 # mm/ns, average (~500 MHz - 1GHz) propagation velocity of the strip 
 		'dt': 1.0/(40e6*256)*1e9,	 # nanoseconds, nominal sampling time interval, 1/(clock to PSEC4 x number of samples)
 		# 'pedestal_data_path': r'/home/cameronpoe/Desktop/lappd_tof_container/testData/old_data/Raw_testData_20230615_164912_b0.txt',
-		'pedestal_data_path': r'/home/cameronpoe/Desktop/lappd_tof_container/testData/ped_Raw_testData_ACC1_20230714_093238_b0.txt',
+		'pedestal_file_name': r'/home/cameronpoe/Desktop/lappd_tof_container/testData/ped_Raw_testData_ACC1_20230714_093238_b0.txt',
 		'pedestal_counts': None,
 		'pedestal_voltage': None,
 		'voltage_count_curves': None,
 		'calib_data_file_path': r'testData/acdc62.root',
 	}
+
+	config62 = 'acdc62.yml'
 
 	file_list = [
 		r'testData/Raw_testData_ACC1_20230714_094355_b0.txt',
@@ -1417,10 +1341,12 @@ if __name__=='__main__':
 		# r'testData/Raw_testData_ACC2_20230714_092904_b0.txt',
 		]
 
-	test_acdc = Acdc(init_dict62)
+	test_acdc = Acdc(config62)
 
 	test_acdc.calibrate_board()
-	# test_acdc.plot_vccs()
+	test_acdc.plot_vccs()
+
+	exit()
 	
 	test_acdc.process_files(file_list)
 

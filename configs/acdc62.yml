@@ -1,0 +1,7 @@
+acdc_id: 62
+lappd_id: 157
+acc_id: 1
+station_id: 1
+sync_ch: 5
+pedestal_file_name: 'testData/ped_Raw_testData_ACC1_20230714_093238_b0.txt'
+calib_file_name: 'calib/acdc62.root'

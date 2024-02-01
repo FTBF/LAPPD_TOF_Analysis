@@ -322,6 +322,7 @@ class Acdc:
 		# Constants
 		self.chan_rearrange = np.array([5,4,3,2,1,0,11,10,9,8,7,6,17,16,15,14,13,12,23,22,21,20,19,18,29,28,27,26,25,24])
 		self.vel = 144.
+		self.dt = 1.0/(40e6*256)*1e9
 
 		# Input data
 		self.times = None
@@ -403,9 +404,10 @@ class Acdc:
 		times = ((times>>32) & 0xffffffff) + 1e-9*(4*(times & 0xffffffff))
 		data = np.array(data).reshape([-1,30,256])
 
+		data = data[:,self.chan_rearrange,:]
+
 		if is_pedestal_data:
 			# Averages pedestal_data over all the events
-			data = data[:,self.chan_rearrange,:]
 			self.pedestal_data = np.copy(data)
 			self.pedestal_counts = np.copy(self.pedestal_data.mean(0))
 
@@ -414,6 +416,7 @@ class Acdc:
 
 	def calibrate_board(self):
 
+		vccs = [[None]*256 for i in range(30)]
 		if CALIB_ADC:
 			# Imports voltage calib data and normalizes
 			with uproot.open(self.calib_data_file_path) as calib_file:
@@ -423,58 +426,35 @@ class Acdc:
 				voltage_counts[:,:,:,0] = voltage_counts[:,:,:,0]*1.2/4096.
 
 				# Filter the data and make it monotonically increasing
-				voltage_counts[:,:,:,1] = savgol_filter(voltage_counts[:,:,:,1], 41, 2, axis=2)
-				reorder = np.argsort(voltage_counts[:,:,:,0], axis=2)
-				voltage_counts = np.take_along_axis(voltage_counts, reorder[:,:,:,np.newaxis], axis=2)
-
-				# data = np.zeros_like(data_raw, dtype=np.float64)
-				vccs = [[None]*256]*30
+				# voltage_counts[:,:,:,1] = savgol_filter(voltage_counts[:,:,:,1], 41, 2, axis=2)
+				# reorder = np.argsort(voltage_counts[:,:,:,0], axis=2)
+				# voltage_counts = np.take_along_axis(voltage_counts, reorder[:,:,:,np.newaxis], axis=2)
+				
 				for ch in range(0, 30):
 					for cap in range(0, 256):
 
-						tck = splrep(voltage_counts[ch, cap, :, 1], voltage_counts[ch, cap, :, 0])
-						print(tck)
-						single_bspline = BSpline(*tck)
+						vert_mask = np.append((np.diff(voltage_counts[ch,cap,:,1]) != 0), False)
+						vert_mask = vert_mask | np.roll(vert_mask, 1)
+						adc_data = voltage_counts[ch, cap, vert_mask, 1]
+						volt_data = voltage_counts[ch, cap, vert_mask, 0]
+
+						tck = splrep(adc_data, volt_data, s=1, k=3)
+						single_bspline = BSpline(*tck, extrapolate=False)
 						vccs[ch][cap] = single_bspline
 
 						fig, ax = plt.subplots()
-						ax.scatter(voltage_counts[ch, cap, :, 1], voltage_counts[ch, cap, :, 0], marker='.', color='black')
-						ax.plot(voltage_counts[ch, cap, :, 1], voltage_counts[ch, cap, :, 0], color='black')
-						fig_domain = np.linspace(voltage_counts[ch,cap,:,1].min(), voltage_counts[ch,cap,:,1].max(), 500)
-						print(single_bspline(fig_domain))
-						ax.plot(fig_domain, single_bspline(fig_domain), color='red')
+						ax.scatter(adc_data, volt_data, marker='.', color='black')
+						fig_domain = np.linspace(adc_data.min(), adc_data.max(), 500)
+						ax.plot(fig_domain, vccs[ch][cap](fig_domain), color='red')
 						plt.show()
 
+				vccs = [vccs[i] for i in self.chan_rearrange]				
 
-					pass
-
-
-				# # Filter the data and make it monotonically increasing
-				# voltage_counts[:,:,:,1] = savgol_filter(voltage_counts[:,:,:,1], 41, 2, axis=2)	
-				# reorder = np.argsort(voltage_counts[:,:,:,0], axis=2)
-				# voltage_counts = np.take_along_axis(voltage_counts, reorder[:,:,:,np.newaxis], axis=2)
-
-				# # First finds the linear regression for ADC v. Voltage
-				# subregion = np.linspace(60,196,137,dtype=int)
-				# xvals = voltage_counts[0,0,subregion,0]
-				# yvals = np.reshape(voltage_counts[:,:,subregion,1], (30*256,len(subregion))).T
-				# A = np.vstack([xvals, np.ones(len(xvals))]).T
-				# vccs = np.linalg.lstsq(A, yvals, rcond=None)[0].T.reshape(30,256,2)
-				
-				# # Now we have to invert the slope/y-intercepts (vccs)
-				# vccs[:,:,1] = -vccs[:,:,1]/vccs[:,:,0]
-				# vccs[:,:,0] = 1/vccs[:,:,0]
-
-				# vccs = vccs[self.chan_rearrange,:]
-
-				if not QUIET:
-					print('ACDC voltage calibrated with VCCs')
+			if not QUIET:
+				print('ACDC voltage calibrated with VCCs')
 		
 		else:
-
 			self.import_raw_data(self.ped_data_path, is_pedestal_data=True)
-			vccs = np.ones((30,256,2))
-			vccs[:,:,1] = -1*np.copy(self.pedestal_counts)
 
 			if not QUIET:
 				print('ACDC ADC counts calibrated with pedestal data')
@@ -505,9 +485,11 @@ class Acdc:
 	def preprocess_data(self, data_raw, times_320):
 
 		# Calibrates the ADC data
-		data_raw = data_raw[:,self.chan_rearrange,:]
+		data = np.empty_like(data_raw, dtype=np.float64)
 		if CALIB_ADC:
-			data = self.vccs[:,:,0]*data_raw[:,:,:] + self.vccs[:,:,1]
+			for ch in range(0,30):
+				for cap in range(0,256):
+					data[:,ch,cap] = self.vccs[ch][cap](data_raw[:,ch,cap])
 		else:
 			data = data_raw - self.pedestal_counts
 
@@ -611,43 +593,15 @@ class Acdc:
 
 				xv = np.copy(self.strip_pos)
 
-				# xh, yh = xh[misfire_mask], yh[misfire_mask]		
-
-				# if i > 6000:
-				# 	print(i)
-				# 	fig, ax = plt.subplots()
-				# 	ax.scatter(xh, yh, marker='.', color='black')
-				# 	ax.plot(xh, yh, color='black')
-				# 	plt.show()
-
-				# # if i == 118 or i == 122 or i == 260 or i == 5419 or i == 6428 or i == 7258:
-				# if i == 7258:
-				# 	print(i)
-				# 	fig, ax = plt.subplots()
-				# 	ax.scatter(xv, yv, marker='.', color='black')
-				# 	ax.plot(xv, yv, color='black')
-				# 	plt.show()
-
-				# 	fig, ax = plt.subplots()
-				# 	ax.scatter()
-
-				# continue
-
-				# Throws out misfired cap channel
-				# if opt_ch != bad_ch:
-				# 	xv = np.delete(np.copy(self.strip_pos), bad_ch)
+				xh, yh = xh[misfire_mask], yh[misfire_mask]		
 
 				# Finds spatial position
-				delta_t, lbound = self.calc_delta_t(xh, yh, offsets)	# delta_t is the difference in time between the two peaks in the waveform
-				# mu0 = xv[opt_ch]
-				# vpos = self.calc_vpos(xv, yv, mu0)
+				delta_t, lbound = self.calc_delta_t(xh, yh, offsets)
+				mu0 = xv[opt_ch]
+				vpos = self.calc_vpos(xv, yv, mu0)
 				
 				# Fits sine channel for event time reconstruction
-				# popt, pcov = curve_fit(sin_const_back, xsin, ysin, p0=p0)
-
-				popt = [1,2,3,4,5,6]
-				# delta_t, lbound = 1, 1
-				vpos = 1
+				popt, pcov = curve_fit(sin_const_back, xsin, ysin, p0=p0)
 
 				delta_t_vec.append(delta_t)
 				vpos_vec.append(vpos)	
@@ -1344,11 +1298,11 @@ if __name__=='__main__':
 	test_acdc = Acdc(config62)
 
 	test_acdc.calibrate_board()
-	test_acdc.plot_vccs()
-
-	exit()
+	# test_acdc.plot_vccs()
 	
 	test_acdc.process_files(file_list)
+
+	exit()
 
 	test_acdc.plot_centers()
 

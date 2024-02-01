@@ -1,10 +1,7 @@
-import os
 import numpy as np 
-import pandas as pd
 import bitstruct.c as bitstruct
 from matplotlib import pyplot as plt
 from matplotlib import colors
-import scipy
 from scipy.optimize import curve_fit
 from scipy.interpolate import splrep, BSpline, CubicSpline, PPoly
 from scipy.signal import find_peaks, savgol_filter
@@ -299,13 +296,18 @@ class Acdc:
 		elif not isinstance(config_data, dict):
 			print(f'`config_data` file-type not recognized: {type(config_data)}')
 			exit()
+
+		# Constants
+		self.chan_rearrange = np.array([5,4,3,2,1,0,11,10,9,8,7,6,17,16,15,14,13,12,23,22,21,20,19,18,29,28,27,26,25,24])
+		self.vel = 144.
+		self.dt = 1.0/(40e6*256)*1e9
 				
 		# Metadata
 		self.acdc_id = config_data['acdc_id']			# ACDC number (see inventory), e.g. '46'
 		self.lappd_id = config_data['lappd_id']			# Incom manufacturing number, e.g. '125'
 		self.acc_id = config_data['acc_id']				# ACC nmber (see inventory), e.g. '1'
 		self.station_id = config_data['station_id']		# station position, e.g. '1'
-		self.sync_ch = config_data['sync_ch']
+		self.sync_ch = self.chan_rearrange(config_data['sync_ch'])
 
 		# Pedestal related
 		self.ped_data_path = config_data['pedestal_file_name']
@@ -318,11 +320,6 @@ class Acdc:
 		self.reflect_time_offset = np.full(30, 3.3)
 		self.wr_calib_offset = np.full(30, 2)
 		self.strip_pos = 6.6*np.linspace(0,29,30)	
-
-		# Constants
-		self.chan_rearrange = np.array([5,4,3,2,1,0,11,10,9,8,7,6,17,16,15,14,13,12,23,22,21,20,19,18,29,28,27,26,25,24])
-		self.vel = 144.
-		self.dt = 1.0/(40e6*256)*1e9
 
 		# Input data
 		self.times = None
@@ -535,8 +532,10 @@ class Acdc:
 			(np.array) waveform: a single event's waveform (2D array) from which the optimal channel will be found		
 		"""
 
-		IMPROVED = True
+		dummy_data = np.copy(data)
+		dummy_data = np.delete(dummy_data, self.sync_ch, axis=1)
 
+		IMPROVED = True
 		if IMPROVED:
 			# Finds optimal channels (1D array, length=# of events, best ch per event)
 			if CALIB_ADC:
@@ -545,7 +544,6 @@ class Acdc:
 			else:
 				baseline = 0
 				too_low_val = -2700
-			dummy_data = np.copy(data)
 			dummy_data[dummy_data < too_low_val] = baseline
 			ch_mins = dummy_data.min(axis=2)
 			organized_chs = np.argsort(ch_mins, axis=1)
@@ -553,7 +551,6 @@ class Acdc:
 			misfire_masks = np.take_along_axis(np.copy(data), opt_chs[:,np.newaxis,np.newaxis], axis=1).reshape((data.shape[0], 256)) >= too_low_val
 		else:
 			# Finds optimal channels (1D array, length=# of events, best ch per event)
-			dummy_data = np.copy(data)
 			ch_mins = dummy_data.min(axis=2)
 			organized_chs = np.argsort(ch_mins, axis=1)
 			opt_chs = organized_chs[:,0]

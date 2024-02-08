@@ -7,3 +7,4 @@ Analysis.ipynb
 *.png
 cameron_plots/
 old_code.py
+npz/*

@@ -312,7 +312,7 @@ class Util:
 	def create_timebase_weighted(self):
 		timebase = np.zeros((30, 256), dtype=np.float64)
 		for channel in self.measurement_config["timebase"]["channels"]:
-			times320, _, sineData = Util.getDataRaw([self.measurement_config["timebase"]["prefix"]+str(channel)+self.measurement_config["timebase"]["suffix"]])[2]
+			times320, _, sineData = Util.getDataRaw([self.measurement_config["timebase"]["prefix"]+str(channel)+self.measurement_config["timebase"]["suffix"]])
 			trigger_pos = ((times320 % 8))*32-16
 			sineData = self.linearize_voltage(sineData) - 1.2/4096*self.measurement_config["timebase"]["pedestal"]
 			true_freq = self.measurement_config["timebase"]["true_freq"]#Frequency of the signal source used for timebase measurement.
@@ -415,7 +415,7 @@ class Util:
 	def plot_ellipses_histeresis(self):
 		timebase = np.zeros((30, 256), dtype=np.float64)
 		for channel in self.measurement_config["timebase"]["channels"]:
-			times320, _, sineData = Util.getDataRaw([self.measurement_config["timebase"]["prefix"]+str(channel)+self.measurement_config["timebase"]["suffix"]])[2]
+			times320, _, sineData = Util.getDataRaw([self.measurement_config["timebase"]["prefix"]+str(channel)+self.measurement_config["timebase"]["suffix"]])
 			trigger_pos = ((times320 % 8))*32-16
 			sineData = self.linearize_voltage(sineData) - 1.2/4096*self.measurement_config["timebase"]["pedestal"]
 			true_freq = self.measurement_config["timebase"]["true_freq"]#Frequency of the signal source used for timebase measurement.

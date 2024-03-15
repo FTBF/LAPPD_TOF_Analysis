@@ -4,7 +4,7 @@ from textwrap import fill
 import numpy as np
 from datetime import datetime
 import yaml
-import bitstruct.c as bitstruct
+import cbitstruct as bitstruct
 import scipy
 import scipy.optimize
 import scipy.interpolate
@@ -225,13 +225,13 @@ class Util:
 		return trigger_pos
 	#Reads a raw data file and saves a timebase calibration file.
 	def create_timebase_simple(self):
-		sineData = Util.getDataRaw([self.measurement_config["timebase"]["input"]])[2]
+		times320, _, sineData = Util.getDataRaw([self.measurement_config["timebase"]["input"]])[2]
 		sineData = self.linearize_voltage(sineData) - 1.2/4096*self.measurement_config["timebase"]["pedestal"]
 		true_freq = self.measurement_config["timebase"]["true_freq"]#Frequency of the signal source used for timebase measurement.
 		nevents = self.measurement_config["timebase"]["nevents"]
 		#Find trigger position
 		
-		trigger_pos = self.find_trigger_pos(sineData)
+		trigger_pos = ((times320 % 8))*32-16
 		ydata = sineData
 
 		timebase = np.zeros((30, 256))
@@ -312,7 +312,8 @@ class Util:
 	def create_timebase_weighted(self):
 		timebase = np.zeros((30, 256), dtype=np.float64)
 		for channel in self.measurement_config["timebase"]["channels"]:
-			sineData = Util.getDataRaw([self.measurement_config["timebase"]["prefix"]+str(channel)+self.measurement_config["timebase"]["suffix"]])[2]
+			times320, _, sineData = Util.getDataRaw([self.measurement_config["timebase"]["prefix"]+str(channel)+self.measurement_config["timebase"]["suffix"]])[2]
+			trigger_pos = ((times320 % 8))*32-16
 			sineData = self.linearize_voltage(sineData) - 1.2/4096*self.measurement_config["timebase"]["pedestal"]
 			true_freq = self.measurement_config["timebase"]["true_freq"]#Frequency of the signal source used for timebase measurement.
 			nevents = self.measurement_config["timebase"]["nevents"]
@@ -333,10 +334,10 @@ class Util:
 					if(diff>1 and iCap+diff>255):continue
 					r = []
 					for e in range(0,nevents):
-						#if cap1 <= trigger[e]+256 <= cap2:
-						#	continue
-						#else:
-						r.append(e)
+						if  abs(trigger_pos[e]-cap1)<15 or (trigger_pos[e]-15<0 and 256-cap1+trigger_pos[e]<15) or (cap1-15<0 and 256-trigger_pos[e]+cap1<15):
+							continue
+						else:
+							r.append(e)
 					x.append(ydata2[r,channel, cap2] + ydata2[r,channel, cap1])
 					y.append(ydata2[r,channel, cap1] - ydata2[r,channel, cap2])
 					# Formulate and solve the least squares problem ||Ax - b ||^2
@@ -364,7 +365,7 @@ class Util:
 						else:
 							chTimeVarMatrix.append(res)
 						if(VERBOSE and diff == 1 and iCap==255):
-							plt.title("Channel %d, cap %d vs cap %d, t0 %d[ps]"%(channel, cap1, cap2, dtij*1e12))
+							plt.title("Channel %d, cap %d vs cap %d, t0 %d[ps], %d events"%(channel, cap1, cap2, dtij*1e12, len(x)))
 							plt.scatter(x[iCap], y[iCap])
 							# Plot the least squares ellipse
 							x_coord = np.linspace(1.05*x[iCap].min(),1.05*x[iCap].max(),300)
@@ -373,7 +374,7 @@ class Util:
 							Z_coord = fit[0] * (X_coord ** 2) + fit[1] * X_coord* Y_coord + fit[2] * Y_coord**2+ fit[3] * X_coord+ fit[4] * Y_coord
 							plt.contour(X_coord, Y_coord, Z_coord, levels=[1], colors=('r'), linewidths=2)
 							plt.savefig("plots/channel%d_cap%d.png"%(channel, iCap))
-							plt.show()
+							plt.clf()
 					except:
 						chTimeOffsetMatrix.append(100.0e-12*diff)
 						chTimeVarMatrix.append(np.array([30.0*diff]))
@@ -391,7 +392,7 @@ class Util:
 				a_matrix.append(arr)
 				y_matrix.append(np.array(chTimeOffsetMatrix))
 				w_matrix.append(np.array(chTimeVarMatrix))
-			#Normalization so that the sum of timebase is 25ns
+			#Normalization so that the sum of timebase is 25ns. This is done by adding a data point (with very small variation and t_0+...+t_255=25e-9.)
 			a_matrix.append(np.ones((1,256)))
 			y_matrix.append(np.array([25e-9]))
 			w_matrix.append(np.array([np.array([1])]))#Have a really small number
@@ -410,7 +411,114 @@ class Util:
 				self.time_df[channel] = timebase[channel]#Keep the address to the array the same so that TTree can read it.
 			self.save()
 		return sineData
-	#Reads a raw data file and saves a timebase calibration file.
+	
+	def plot_ellipses_histeresis(self):
+		timebase = np.zeros((30, 256), dtype=np.float64)
+		for channel in self.measurement_config["timebase"]["channels"]:
+			times320, _, sineData = Util.getDataRaw([self.measurement_config["timebase"]["prefix"]+str(channel)+self.measurement_config["timebase"]["suffix"]])[2]
+			trigger_pos = ((times320 % 8))*32-16
+			sineData = self.linearize_voltage(sineData) - 1.2/4096*self.measurement_config["timebase"]["pedestal"]
+			true_freq = self.measurement_config["timebase"]["true_freq"]#Frequency of the signal source used for timebase measurement.
+			nevents = self.measurement_config["timebase"]["nevents"]
+			ydata = sineData
+			ydata2 = np.concatenate((ydata, ydata, ydata), axis=2)
+			a_matrix = []
+			y_matrix = []
+			w_matrix = []
+			for diff in [1, 2, 3, 4, 5, 6]:
+				chTimeOffsetMatrix = []
+				chTimeVarMatrix = []
+				x = []
+				y =[]
+				coefs = []
+				binsize = self.measurement_config["timebase"]["binsize"]
+				for bin in range(nevents//binsize):
+					for iCap in range(256):
+						cap1 = iCap+256
+						cap2 = iCap+256+diff
+						if(diff>1 and iCap+diff>255):continue
+						r = []
+						for e in range(bin*binsize,max(bin*binsize+binsize, nevents)):
+							if  abs(trigger_pos[e]-cap1)<15 or (trigger_pos[e]-15<0 and 256-cap1+trigger_pos[e]<15) or (cap1-15<0 and 256-trigger_pos[e]+cap1<15):
+								continue
+							else:
+								r.append(e)
+						x.append(ydata2[r,channel, cap2] + ydata2[r,channel, cap1])
+						y.append(ydata2[r,channel, cap1] - ydata2[r,channel, cap2])
+						# Formulate and solve the least squares problem ||Ax - b ||^2
+						
+						A = np.column_stack([x[iCap]**2, x[iCap] * y[iCap], y[iCap]**2, x[iCap], y[iCap]])
+						b = np.ones_like(x[iCap])
+						lstsq = np.linalg.lstsq(A, b, rcond=None)
+						fit = lstsq[0].squeeze()
+						res = lstsq[1] / (1/fit[0]+1/fit[2])# rough estimation of the size of the ellipse.
+						coefs.append(fit)
+						#print(fit)
+						try:
+							if(np.shape(res)!=(1,)):
+								raise Exception("")
+							a = -math.sqrt(2*(fit[0]*fit[4]**2+fit[2]*fit[3]**2-fit[1]*fit[3]*fit[4]-(fit[1]**2-4*fit[0]*fit[2]))*(fit[0]+fit[2]+math.sqrt((fit[0]-fit[2])**2+fit[1]**2)))/(fit[1]**2 - 4*fit[0]*fit[2])
+							#print("a = %f"%a)
+							b = -math.sqrt(2*(fit[0]*fit[4]**2+fit[2]*fit[3]**2-fit[1]*fit[3]*fit[4]-(fit[1]**2-4*fit[0]*fit[2]))*(fit[0]+fit[2]-math.sqrt((fit[0]-fit[2])**2+fit[1]**2)))/(fit[1]**2 - 4*fit[0]*fit[2])
+							#print("b = %f"%b)
+
+							dtij = math.atan(b/a)/(math.pi*true_freq)
+							#print("dtij = %f ps"%(dtij*1e12))
+							chTimeOffsetMatrix.append(dtij)
+							if(diff==1 and iCap==255):
+								chTimeVarMatrix.append(res/5)#Compensation for wraparound.
+							else:
+								chTimeVarMatrix.append(res)
+							if(VERBOSE and diff == 1 and iCap==255):
+								plt.title("Channel %d, cap %d vs cap %d, t0 %d[ps], %d events"%(channel, cap1, cap2, dtij*1e12, len(x)))
+								plt.scatter(x[iCap], y[iCap])
+								plt.xlabel("320MHz clock %d to %d"%(times320[bin*binsize], times320[(bin+1)*binsize]))
+								# Plot the least squares ellipse
+								x_coord = np.linspace(1.05*x[iCap].min(),1.05*x[iCap].max(),300)
+								y_coord = np.linspace(1.05*y[iCap].min(),1.05*y[iCap].max(),300)
+								X_coord, Y_coord = np.meshgrid(x_coord, y_coord)
+								Z_coord = fit[0] * (X_coord ** 2) + fit[1] * X_coord* Y_coord + fit[2] * Y_coord**2+ fit[3] * X_coord+ fit[4] * Y_coord
+								plt.contour(X_coord, Y_coord, Z_coord, levels=[1], colors=('r'), linewidths=2)
+								plt.savefig("plots/channel%d_cap%d_bin%d.png"%(channel, iCap, bin))
+								plt.clf()
+						except:
+							chTimeOffsetMatrix.append(100.0e-12*diff)
+							chTimeVarMatrix.append(np.array([30.0*diff]))
+				vsize = 256-diff
+				if(diff==1):
+					vsize = 256
+
+				arr = np.zeros((vsize,256))
+				for i in range(vsize):
+					for j in range(256):#Do not include wraparound terms for diff>1. The time difference is too large for the ellipse method to work.
+						if(j-i>=0 and j-i<diff):
+							arr[i,j] = 1
+						if(i>=256 and j==256):
+							arr[i,j] = 1
+				a_matrix.append(arr)
+				y_matrix.append(np.array(chTimeOffsetMatrix))
+				w_matrix.append(np.array(chTimeVarMatrix))
+			#Normalization so that the sum of timebase is 25ns. This is done by adding a data point (with very small variation and t_0+...+t_255=25e-9.)
+			a_matrix.append(np.ones((1,256)))
+			y_matrix.append(np.array([25e-9]))
+			w_matrix.append(np.array([np.array([1])]))#Have a really small number
+			timebase[channel] = np.linalg.lstsq(np.divide(np.concatenate(a_matrix, axis=0),np.concatenate(w_matrix, axis=0)), np.divide(np.concatenate(y_matrix, axis=None),np.concatenate(w_matrix, axis=0).squeeze()), rcond=None)[0].squeeze()
+			if(VERBOSE):
+				print(timebase[channel])
+				print(np.sum(timebase[channel]))
+				plt.title("Timebase Weighted")
+				plt.xlabel("Sample Number")
+				plt.ylabel("Timebase [s]")
+				plt.errorbar(range(256), np.concatenate(y_matrix, axis=None)[0:256], np.concatenate(w_matrix, axis=0).squeeze()[0:256] * 1e-13, ecolor="black")
+				plt.step(range(256), timebase[channel])
+				plt.show()
+		if(SAVE):
+			for channel in self.measurement_config["timebase"]["channels"]:
+				self.time_df[channel] = timebase[channel]#Keep the address to the array the same so that TTree can read it.
+			self.save()
+		return sineData
+
+	#Generates a data file and saves a timebase calibration file.
 
 	def simulate_timebase_weighted(self):
 		timebase = self.time_df

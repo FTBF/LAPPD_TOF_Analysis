@@ -470,6 +470,7 @@ class Util:
 							else:
 								chTimeVarMatrix.append(res)
 						
+							plt.clf()
 							plt.title("Channel %d, cap %d vs cap %d, t0 %d[ps], %d events"%(channel, cap1, cap2, dtij*1e12, len(x)))
 							plt.scatter(x, y)
 							plt.xlabel("320MHz clock %d to %d"%(times320[bin*binsize], times320[(bin+1)*binsize]))
@@ -480,7 +481,7 @@ class Util:
 							Z_coord = fit[0] * (X_coord ** 2) + fit[1] * X_coord* Y_coord + fit[2] * Y_coord**2+ fit[3] * X_coord+ fit[4] * Y_coord
 							plt.contour(X_coord, Y_coord, Z_coord, levels=[1], colors=('r'), linewidths=2)
 							plt.savefig("plots/channel%d_cap%d_bin%d.png"%(channel, iCap, bin))
-							plt.clf()
+			
 						except:
 							chTimeOffsetMatrix.append(100.0e-12*diff)
 							chTimeVarMatrix.append(np.array([30.0*diff]))

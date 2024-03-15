@@ -438,7 +438,7 @@ class Util:
 						cap2 = iCap+256+diff
 						if(diff>1 and iCap+diff>255):continue
 						r = []
-						for e in range(bin*binsize,max(bin*binsize+binsize, nevents)):
+						for e in range(bin*binsize,min(bin*binsize+binsize, nevents)):
 							if  abs(trigger_pos[e]-cap1)<15 or (trigger_pos[e]-15<0 and 256-cap1+trigger_pos[e]<15) or (cap1-15<0 and 256-trigger_pos[e]+cap1<15):
 								continue
 							else:

@@ -428,12 +428,12 @@ class Util:
 			for diff in [1, 2, 3, 4, 5, 6]:
 				chTimeOffsetMatrix = []
 				chTimeVarMatrix = []
-				x = []
-				y =[]
-				coefs = []
 				binsize = self.measurement_config["timebase"]["binsize"]
-				for bin in range(nevents//binsize):
-					for iCap in range(256):
+				for iCap in range(256):
+					for bin in range(nevents//binsize):
+						x = []
+						y =[]
+						coefs = []
 						cap1 = iCap+256
 						cap2 = iCap+256+diff
 						if(diff>1 and iCap+diff>255):continue
@@ -447,8 +447,8 @@ class Util:
 						y.append(ydata2[r,channel, cap1] - ydata2[r,channel, cap2])
 						# Formulate and solve the least squares problem ||Ax - b ||^2
 						
-						A = np.column_stack([x[iCap]**2, x[iCap] * y[iCap], y[iCap]**2, x[iCap], y[iCap]])
-						b = np.ones_like(x[iCap])
+						A = np.column_stack([x**2, x * y, y**2, x, y])
+						b = np.ones_like(x)
 						lstsq = np.linalg.lstsq(A, b, rcond=None)
 						fit = lstsq[0].squeeze()
 						res = lstsq[1] / (1/fit[0]+1/fit[2])# rough estimation of the size of the ellipse.
@@ -471,11 +471,11 @@ class Util:
 								chTimeVarMatrix.append(res)
 						
 							plt.title("Channel %d, cap %d vs cap %d, t0 %d[ps], %d events"%(channel, cap1, cap2, dtij*1e12, len(x)))
-							plt.scatter(x[iCap], y[iCap])
+							plt.scatter(x, y)
 							plt.xlabel("320MHz clock %d to %d"%(times320[bin*binsize], times320[(bin+1)*binsize]))
 							# Plot the least squares ellipse
-							x_coord = np.linspace(1.05*x[iCap].min(),1.05*x[iCap].max(),300)
-							y_coord = np.linspace(1.05*y[iCap].min(),1.05*y[iCap].max(),300)
+							x_coord = np.linspace(1.05*x.min(),1.05*x.max(),300)
+							y_coord = np.linspace(1.05*y.min(),1.05*y.max(),300)
 							X_coord, Y_coord = np.meshgrid(x_coord, y_coord)
 							Z_coord = fit[0] * (X_coord ** 2) + fit[1] * X_coord* Y_coord + fit[2] * Y_coord**2+ fit[3] * X_coord+ fit[4] * Y_coord
 							plt.contour(X_coord, Y_coord, Z_coord, levels=[1], colors=('r'), linewidths=2)

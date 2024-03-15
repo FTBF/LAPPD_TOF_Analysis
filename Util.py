@@ -443,8 +443,8 @@ class Util:
 								continue
 							else:
 								r.append(e)
-						x.append(ydata2[r,channel, cap2] + ydata2[r,channel, cap1])
-						y.append(ydata2[r,channel, cap1] - ydata2[r,channel, cap2])
+						x = (ydata2[r,channel, cap2] + ydata2[r,channel, cap1])
+						y = (ydata2[r,channel, cap1] - ydata2[r,channel, cap2])
 						# Formulate and solve the least squares problem ||Ax - b ||^2
 						
 						A = np.column_stack([x**2, x * y, y**2, x, y])

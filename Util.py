@@ -1311,6 +1311,8 @@ if __name__ == "__main__":
 		ut.create_timebase_simple()
 	if 'w' in ut.measurement_config["tasks"]:
 		ut.create_timebase_weighted()
+	if 'h' in ut.measurement_config["tasks"]:
+		ut.plot_ellipses_histeresis()
 	if 'W' in ut.measurement_config["tasks"]:
 		ut.simulate_timebase_weighted()
 	if 'T' in ut.measurement_config["tasks"]:

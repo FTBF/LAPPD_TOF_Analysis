@@ -364,7 +364,7 @@ class Util:
 							chTimeVarMatrix.append(res/5)#Compensation for wraparound.
 						else:
 							chTimeVarMatrix.append(res)
-						if(VERBOSE and diff == 1 and iCap==255):
+						if(VERBOSE and diff == 1):
 							plt.title("Channel %d, cap %d vs cap %d, t0 %d[ps], %d events"%(channel, cap1, cap2, dtij*1e12, len(x)))
 							plt.scatter(x[iCap], y[iCap])
 							# Plot the least squares ellipse
@@ -469,18 +469,18 @@ class Util:
 								chTimeVarMatrix.append(res/5)#Compensation for wraparound.
 							else:
 								chTimeVarMatrix.append(res)
-							if(VERBOSE and diff == 1 and iCap==255):
-								plt.title("Channel %d, cap %d vs cap %d, t0 %d[ps], %d events"%(channel, cap1, cap2, dtij*1e12, len(x)))
-								plt.scatter(x[iCap], y[iCap])
-								plt.xlabel("320MHz clock %d to %d"%(times320[bin*binsize], times320[(bin+1)*binsize]))
-								# Plot the least squares ellipse
-								x_coord = np.linspace(1.05*x[iCap].min(),1.05*x[iCap].max(),300)
-								y_coord = np.linspace(1.05*y[iCap].min(),1.05*y[iCap].max(),300)
-								X_coord, Y_coord = np.meshgrid(x_coord, y_coord)
-								Z_coord = fit[0] * (X_coord ** 2) + fit[1] * X_coord* Y_coord + fit[2] * Y_coord**2+ fit[3] * X_coord+ fit[4] * Y_coord
-								plt.contour(X_coord, Y_coord, Z_coord, levels=[1], colors=('r'), linewidths=2)
-								plt.savefig("plots/channel%d_cap%d_bin%d.png"%(channel, iCap, bin))
-								plt.clf()
+						
+							plt.title("Channel %d, cap %d vs cap %d, t0 %d[ps], %d events"%(channel, cap1, cap2, dtij*1e12, len(x)))
+							plt.scatter(x[iCap], y[iCap])
+							plt.xlabel("320MHz clock %d to %d"%(times320[bin*binsize], times320[(bin+1)*binsize]))
+							# Plot the least squares ellipse
+							x_coord = np.linspace(1.05*x[iCap].min(),1.05*x[iCap].max(),300)
+							y_coord = np.linspace(1.05*y[iCap].min(),1.05*y[iCap].max(),300)
+							X_coord, Y_coord = np.meshgrid(x_coord, y_coord)
+							Z_coord = fit[0] * (X_coord ** 2) + fit[1] * X_coord* Y_coord + fit[2] * Y_coord**2+ fit[3] * X_coord+ fit[4] * Y_coord
+							plt.contour(X_coord, Y_coord, Z_coord, levels=[1], colors=('r'), linewidths=2)
+							plt.savefig("plots/channel%d_cap%d_bin%d.png"%(channel, iCap, bin))
+							plt.clf()
 						except:
 							chTimeOffsetMatrix.append(100.0e-12*diff)
 							chTimeVarMatrix.append(np.array([30.0*diff]))

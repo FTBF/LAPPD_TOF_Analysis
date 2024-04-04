@@ -23,6 +23,7 @@ OLD_FORMAT = False
 DEBUG = False
 VERBOSE = False
 SAVE = True
+WRAPAROUND_ONLY = False
 class Util:
 	def __init__(self, board_config=None):
 		self.measurement_config = Util.load_config(board_config)
@@ -340,6 +341,12 @@ class Util:
 							r.append(e)
 					x.append(ydata2[r,channel, cap2] + ydata2[r,channel, cap1])
 					y.append(ydata2[r,channel, cap1] - ydata2[r,channel, cap2])
+#Cuts
+					y[iCap] = y[iCap][(x > 1200) | (x < -1200)]
+					x[iCap] = x[iCap][(x > 1200) | (x < -1200)]
+					y[iCap] = y[iCap][(x > 4) | (x < 2.3)]
+					x[iCap] = x[iCap][(x > 4) | (x < 2.3)]
+
 					# Formulate and solve the least squares problem ||Ax - b ||^2
 					
 					A = np.column_stack([x[iCap]**2, x[iCap] * y[iCap], y[iCap]**2, x[iCap], y[iCap]])
@@ -415,7 +422,10 @@ class Util:
 	def plot_ellipses_histeresis(self):
 		timebase = np.zeros((30, 256), dtype=np.float64)
 		for channel in self.measurement_config["timebase"]["channels"]:
-			times320, _, sineData = Util.getDataRaw([self.measurement_config["timebase"]["prefix"]+str(channel)+self.measurement_config["timebase"]["suffix"]])
+			if self.measurement_config["timebase"]["input"] != None:
+				times320, _, sineData = Util.getDataRaw([self.measurement_config["timebase"]["input"]])
+			else:
+				times320, _, sineData = Util.getDataRaw([self.measurement_config["timebase"]["prefix"]+str(channel)+self.measurement_config["timebase"]["suffix"]])
 			trigger_pos = ((times320 % 8))*32-16
 			sineData = self.linearize_voltage(sineData) - 1.2/4096*self.measurement_config["timebase"]["pedestal"]
 			true_freq = self.measurement_config["timebase"]["true_freq"]#Frequency of the signal source used for timebase measurement.
@@ -425,11 +435,12 @@ class Util:
 			a_matrix = []
 			y_matrix = []
 			w_matrix = []
-			for diff in [1, 2, 3, 4, 5, 6]:
+			for diff in [1]:
 				chTimeOffsetMatrix = []
 				chTimeVarMatrix = []
 				binsize = self.measurement_config["timebase"]["binsize"]
 				for iCap in range(256):
+					chTimeOffsetBinMatrix = []
 					for bin in range(nevents//binsize):
 						x = []
 						y =[]
@@ -443,8 +454,18 @@ class Util:
 								continue
 							else:
 								r.append(e)
-						x = (ydata2[r,channel, cap2] + ydata2[r,channel, cap1])
-						y = (ydata2[r,channel, cap1] - ydata2[r,channel, cap2])
+						x_tmp = (ydata2[r,channel, cap2] + ydata2[r,channel, cap1])
+						y_tmp = (ydata2[r,channel, cap1] - ydata2[r,channel, cap2])
+						indarray = np.argsort(x_tmp)
+						xpeak_plus = np.median(x_tmp[indarray[-binsize//10:]])
+						x_zero = np.median(x_tmp)
+
+						indarray = np.argsort(y_tmp)
+						ypeak_plus = np.median(y_tmp[indarray[-binsize//10:]])
+						y_zero = np.median(y_tmp)
+						r0 = [r0 for r0 in range(len(y_tmp)) if ((x_tmp[r0]-x_zero)/xpeak_plus)**2+((y_tmp[r0]-y_zero)/ypeak_plus)**2<1.5]
+						y = y_tmp[r0]
+						x = x_tmp[r0]
 						# Formulate and solve the least squares problem ||Ax - b ||^2
 						
 						A = np.column_stack([x**2, x * y, y**2, x, y])
@@ -465,58 +486,34 @@ class Util:
 							dtij = math.atan(b/a)/(math.pi*true_freq)
 							#print("dtij = %f ps"%(dtij*1e12))
 							chTimeOffsetMatrix.append(dtij)
+							chTimeOffsetBinMatrix.append(dtij)
 							if(diff==1 and iCap==255):
 								chTimeVarMatrix.append(res/5)#Compensation for wraparound.
 							else:
 								chTimeVarMatrix.append(res)
-						
-							plt.clf()
-							plt.title("Channel %d, cap %d vs cap %d, t0 %d[ps], %d events"%(channel, cap1, cap2, dtij*1e12, len(x)))
-							plt.scatter(x, y)
-							plt.xlabel("320MHz clock %d to %d"%(times320[bin*binsize], times320[(bin+1)*binsize]))
-							# Plot the least squares ellipse
-							x_coord = np.linspace(1.05*x.min(),1.05*x.max(),300)
-							y_coord = np.linspace(1.05*y.min(),1.05*y.max(),300)
-							X_coord, Y_coord = np.meshgrid(x_coord, y_coord)
-							Z_coord = fit[0] * (X_coord ** 2) + fit[1] * X_coord* Y_coord + fit[2] * Y_coord**2+ fit[3] * X_coord+ fit[4] * Y_coord
-							plt.contour(X_coord, Y_coord, Z_coord, levels=[1], colors=('r'), linewidths=2)
-							plt.savefig("plots/channel%d_cap%d_bin%d.png"%(channel, iCap, bin))
+							if(not WRAPAROUND_ONLY or iCap == 255):
+								plt.clf()
+								plt.title("Channel %d, cap %d vs cap %d, t0 %d[ps], %d events"%(channel, cap1, cap2, dtij*1e12, len(x)))
+								plt.scatter(x, y)
+								plt.xlabel("320MHz clock %d to %d"%(times320[bin*binsize], times320[(bin+1)*binsize]))
+								# Plot the least squares ellipse
+								x_coord = np.linspace(1.05*x.min(),1.05*x.max(),300)
+								y_coord = np.linspace(1.05*y.min(),1.05*y.max(),300)
+								X_coord, Y_coord = np.meshgrid(x_coord, y_coord)
+								Z_coord = fit[0] * (X_coord ** 2) + fit[1] * X_coord* Y_coord + fit[2] * Y_coord**2+ fit[3] * X_coord+ fit[4] * Y_coord
+								plt.contour(X_coord, Y_coord, Z_coord, levels=[1], colors=('r'), linewidths=2)
+								plt.savefig("plots/channel%d_cap%d_bin%d.png"%(channel, iCap, bin))
 			
 						except:
 							chTimeOffsetMatrix.append(100.0e-12*diff)
 							chTimeVarMatrix.append(np.array([30.0*diff]))
-				vsize = 256-diff
-				if(diff==1):
-					vsize = 256
-
-				arr = np.zeros((vsize,256))
-				for i in range(vsize):
-					for j in range(256):#Do not include wraparound terms for diff>1. The time difference is too large for the ellipse method to work.
-						if(j-i>=0 and j-i<diff):
-							arr[i,j] = 1
-						if(i>=256 and j==256):
-							arr[i,j] = 1
-				a_matrix.append(arr)
-				y_matrix.append(np.array(chTimeOffsetMatrix))
-				w_matrix.append(np.array(chTimeVarMatrix))
-			#Normalization so that the sum of timebase is 25ns. This is done by adding a data point (with very small variation and t_0+...+t_255=25e-9.)
-			a_matrix.append(np.ones((1,256)))
-			y_matrix.append(np.array([25e-9]))
-			w_matrix.append(np.array([np.array([1])]))#Have a really small number
-			timebase[channel] = np.linalg.lstsq(np.divide(np.concatenate(a_matrix, axis=0),np.concatenate(w_matrix, axis=0)), np.divide(np.concatenate(y_matrix, axis=None),np.concatenate(w_matrix, axis=0).squeeze()), rcond=None)[0].squeeze()
-			if(VERBOSE):
-				print(timebase[channel])
-				print(np.sum(timebase[channel]))
-				plt.title("Timebase Weighted")
-				plt.xlabel("Sample Number")
-				plt.ylabel("Timebase [s]")
-				plt.errorbar(range(256), np.concatenate(y_matrix, axis=None)[0:256], np.concatenate(w_matrix, axis=0).squeeze()[0:256] * 1e-13, ecolor="black")
-				plt.step(range(256), timebase[channel])
-				plt.show()
-		if(SAVE):
-			for channel in self.measurement_config["timebase"]["channels"]:
-				self.time_df[channel] = timebase[channel]#Keep the address to the array the same so that TTree can read it.
-			self.save()
+					if(iCap == 255):
+						plt.clf()
+						plt.title("Time Offset Change Over Time, 3000Hz Trigger Rate")
+						plt.xlabel("Time [s]")
+						plt.ylabel("Timebase [s]")
+						plt.step(np.array([times320[bin*binsize]/320e6 for bin in range(nevents//binsize)]).flatten(), np.array(chTimeOffsetBinMatrix).flatten())
+						plt.savefig("plots/channel%d_timeOffsetFluctuation.png"%(channel))
 		return sineData
 
 	#Generates a data file and saves a timebase calibration file.
@@ -1300,6 +1297,8 @@ if __name__ == "__main__":
 		DEBUG = True
 	if 'V' in ut.measurement_config["tasks"]:
 		VERBOSE = True
+	if 'R' in ut.measurement_config["tasks"]:
+		WRAPAROUND_ONLY = True
 	if 'r' in ut.measurement_config["tasks"]:
 		ut.raw_plot()
 	if 'p' in ut.measurement_config["tasks"]:

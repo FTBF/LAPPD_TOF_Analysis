@@ -4,6 +4,7 @@ tasks: h
 #r: raw data, p: linearized plot, v: voltage curve, t:timebase, T:timebase first order 
 #j:phase jittering calculation, l: first order timebase correction
 #w: weighted timebase correction, h: draw ellipse plots, R: wraparound only
+#E: Add errorbar
 plot:
   event: [200, 300, 400, 500, 600, 700, 800, 900]
   pedestal: 0xb00

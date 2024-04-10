@@ -24,6 +24,7 @@ DEBUG = False
 VERBOSE = False
 SAVE = True
 WRAPAROUND_ONLY = False
+ERRORBAR = False
 class Util:
 	def __init__(self, board_config=None):
 		self.measurement_config = Util.load_config(board_config)
@@ -325,7 +326,7 @@ class Util:
 			w_matrix = []
 			for diff in [1, 2, 3, 4, 5, 6]:
 				chTimeOffsetMatrix = []
-				chTimeVarMatrix = []
+				chTimeStdevMatrix = []
 				x = []
 				y =[]
 				coefs = []
@@ -341,7 +342,7 @@ class Util:
 							r.append(e)
 					x.append(ydata2[r,channel, cap2] + ydata2[r,channel, cap1])
 					y.append(ydata2[r,channel, cap1] - ydata2[r,channel, cap2])
-#Cuts
+					#Cuts
 					y[iCap] = y[iCap][(x > 1200) | (x < -1200)]
 					x[iCap] = x[iCap][(x > 1200) | (x < -1200)]
 					y[iCap] = y[iCap][(x > 4) | (x < 2.3)]
@@ -353,7 +354,9 @@ class Util:
 					b = np.ones_like(x[iCap])
 					lstsq = np.linalg.lstsq(A, b, rcond=None)
 					fit = lstsq[0].squeeze()
-					res = lstsq[1] / (1/fit[0]+1/fit[2])# rough estimation of the size of the ellipse.
+
+					
+					res = np.sqrt(lstsq[1] / (np.size(b)-2))# res is unitless because we are fitting the ellipse to 1, a unitless quantity.
 					coefs.append(fit)
 					#print(fit)
 					try:
@@ -367,10 +370,8 @@ class Util:
 						dtij = math.atan(b/a)/(math.pi*true_freq)
 						#print("dtij = %f ps"%(dtij*1e12))
 						chTimeOffsetMatrix.append(dtij)
-						if(diff==1 and iCap==255):
-							chTimeVarMatrix.append(res/5)#Compensation for wraparound.
-						else:
-							chTimeVarMatrix.append(res)
+						# The assumption here is that the width of the ellipse has much less uncertainty than the height of the ellipse.
+						chTimeStdevMatrix.append(res*dtij)
 						if(VERBOSE and diff == 1):
 							plt.title("Channel %d, cap %d vs cap %d, t0 %d[ps], %d events"%(channel, cap1, cap2, dtij*1e12, len(x)))
 							plt.scatter(x[iCap], y[iCap])
@@ -383,8 +384,10 @@ class Util:
 							plt.savefig("plots/channel%d_cap%d.png"%(channel, iCap))
 							plt.clf()
 					except:
+						if(VERBOSE):
+							print("Error in timebase calculation. Using default value. %d samples apart, %dth sample."%(diff, iCap)) 
 						chTimeOffsetMatrix.append(100.0e-12*diff)
-						chTimeVarMatrix.append(np.array([30.0*diff]))
+						chTimeStdevMatrix.append(np.array([30.0*diff]))
 				vsize = 256-diff
 				if(diff==1):
 					vsize = 256
@@ -398,11 +401,11 @@ class Util:
 							arr[i,j] = 1
 				a_matrix.append(arr)
 				y_matrix.append(np.array(chTimeOffsetMatrix))
-				w_matrix.append(np.array(chTimeVarMatrix))
+				w_matrix.append(np.array(chTimeStdevMatrix))
 			#Normalization so that the sum of timebase is 25ns. This is done by adding a data point (with very small variation and t_0+...+t_255=25e-9.)
 			a_matrix.append(np.ones((1,256)))
 			y_matrix.append(np.array([25e-9]))
-			w_matrix.append(np.array([np.array([1])]))#Have a really small number
+			w_matrix.append(np.array([np.array([np.min(w_matrix)/100])]))#Have a really small number
 			timebase[channel] = np.linalg.lstsq(np.divide(np.concatenate(a_matrix, axis=0),np.concatenate(w_matrix, axis=0)), np.divide(np.concatenate(y_matrix, axis=None),np.concatenate(w_matrix, axis=0).squeeze()), rcond=None)[0].squeeze()
 			if(VERBOSE):
 				print(timebase[channel])
@@ -410,7 +413,8 @@ class Util:
 				plt.title("Timebase Weighted")
 				plt.xlabel("Sample Number")
 				plt.ylabel("Timebase [s]")
-				plt.errorbar(range(256), np.concatenate(y_matrix, axis=None)[0:256], np.concatenate(w_matrix, axis=0).squeeze()[0:256] * 1e-13, ecolor="black")
+				if(ERRORBAR):
+					plt.errorbar(range(256), np.concatenate(y_matrix, axis=None)[0:256], np.concatenate(w_matrix, axis=0).squeeze()[0:256] * 1e-13, ecolor="black")
 				plt.step(range(256), timebase[channel])
 				plt.show()
 		if(SAVE):
@@ -437,10 +441,11 @@ class Util:
 			w_matrix = []
 			for diff in [1]:
 				chTimeOffsetMatrix = []
-				chTimeVarMatrix = []
+				chTimeStdevMatrix = []
 				binsize = self.measurement_config["timebase"]["binsize"]
 				for iCap in range(256):
 					chTimeOffsetBinMatrix = []
+					chTimeStdevBinMatrix = []
 					for bin in range(nevents//binsize):
 						x = []
 						y =[]
@@ -472,7 +477,7 @@ class Util:
 						b = np.ones_like(x)
 						lstsq = np.linalg.lstsq(A, b, rcond=None)
 						fit = lstsq[0].squeeze()
-						res = lstsq[1] / (1/fit[0]+1/fit[2])# rough estimation of the size of the ellipse.
+						res = np.sqrt(lstsq[1]/(np.size(b)-2))# res is unitless because we are fitting the ellipse to 1, a unitless quantity.
 						coefs.append(fit)
 						#print(fit)
 						try:
@@ -485,12 +490,8 @@ class Util:
 
 							dtij = math.atan(b/a)/(math.pi*true_freq)
 							#print("dtij = %f ps"%(dtij*1e12))
-							chTimeOffsetMatrix.append(dtij)
 							chTimeOffsetBinMatrix.append(dtij)
-							if(diff==1 and iCap==255):
-								chTimeVarMatrix.append(res/5)#Compensation for wraparound.
-							else:
-								chTimeVarMatrix.append(res)
+							chTimeStdevBinMatrix.append(res*dtij)
 							if(not WRAPAROUND_ONLY or iCap == 255):
 								plt.clf()
 								plt.title("Channel %d, cap %d vs cap %d, t0 %d[ps], %d events"%(channel, cap1, cap2, dtij*1e12, len(x)))
@@ -506,13 +507,15 @@ class Util:
 			
 						except:
 							chTimeOffsetMatrix.append(100.0e-12*diff)
-							chTimeVarMatrix.append(np.array([30.0*diff]))
+							chTimeStdevMatrix.append(np.array([30.0*diff]))
 					if(iCap == 255):
 						plt.clf()
 						plt.title("Time Offset Change Over Time, 3000Hz Trigger Rate")
 						plt.xlabel("Time [s]")
 						plt.ylabel("Timebase [s]")
 						plt.step(np.array([times320[bin*binsize]/320e6 for bin in range(nevents//binsize)]).flatten(), np.array(chTimeOffsetBinMatrix).flatten())
+						if(ERRORBAR):
+							plt.errorbar(np.array([times320[bin*binsize]/320e6 for bin in range(nevents//binsize)]).flatten(), np.array(chTimeOffsetBinMatrix).flatten(), np.array(chTimeStdevMatrix).flatten(), ecolor="black")
 						plt.savefig("plots/channel%d_timeOffsetFluctuation.png"%(channel))
 		return sineData
 
@@ -1299,6 +1302,8 @@ if __name__ == "__main__":
 		VERBOSE = True
 	if 'R' in ut.measurement_config["tasks"]:
 		WRAPAROUND_ONLY = True
+	if 'E' in ut.measurement_config["tasks"]:
+		ERRORBAR = True
 	if 'r' in ut.measurement_config["tasks"]:
 		ut.raw_plot()
 	if 'p' in ut.measurement_config["tasks"]:

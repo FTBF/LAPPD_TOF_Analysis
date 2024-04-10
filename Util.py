@@ -440,8 +440,6 @@ class Util:
 			y_matrix = []
 			w_matrix = []
 			for diff in [1]:
-				chTimeOffsetMatrix = []
-				chTimeStdevMatrix = []
 				binsize = self.measurement_config["timebase"]["binsize"]
 				for iCap in range(256):
 					chTimeOffsetBinMatrix = []
@@ -506,8 +504,8 @@ class Util:
 								plt.savefig("plots/channel%d_cap%d_bin%d.png"%(channel, iCap, bin))
 			
 						except:
-							chTimeOffsetMatrix.append(100.0e-12*diff)
-							chTimeStdevMatrix.append(np.array([30.0*diff]))
+							chTimeOffsetBinMatrix.append(100.0e-12*diff)
+							chTimeStdevBinMatrix.append(np.array([30.0*diff]))
 					if(iCap == 255):
 						plt.clf()
 						plt.title("Time Offset Change Over Time, 3000Hz Trigger Rate")
@@ -515,7 +513,7 @@ class Util:
 						plt.ylabel("Timebase [s]")
 						plt.step(np.array([times320[bin*binsize]/320e6 for bin in range(nevents//binsize)]).flatten(), np.array(chTimeOffsetBinMatrix).flatten())
 						if(ERRORBAR):
-							plt.errorbar(np.array([times320[bin*binsize]/320e6 for bin in range(nevents//binsize)]).flatten(), np.array(chTimeOffsetBinMatrix).flatten(), np.array(chTimeStdevMatrix).flatten(), ecolor="black")
+							plt.errorbar(np.array([times320[bin*binsize]/320e6 for bin in range(nevents//binsize)]).flatten(), np.array(chTimeOffsetBinMatrix).flatten(), np.array(chTimeStdevBinMatrix).flatten(), ecolor="black")
 						plt.savefig("plots/channel%d_timeOffsetFluctuation.png"%(channel))
 		return sineData
 

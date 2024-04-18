@@ -327,31 +327,38 @@ class Util:
 			for diff in [1, 2, 3, 4, 5, 6]:
 				chTimeOffsetMatrix = []
 				chTimeStdevMatrix = []
-				x = []
-				y =[]
 				coefs = []
 				for iCap in range(256):
+					x = []
+					y =[]
 					cap1 = iCap+256
 					cap2 = iCap+256+diff
 					if(diff>1 and iCap+diff>255):continue
 					r = []
-					for e in range(0,nevents):
+					#Find the events that are not close to the trigger.
+					for e in range(nevents):
 						if  abs(trigger_pos[e]-cap1)<15 or (trigger_pos[e]-15<0 and 256-cap1+trigger_pos[e]<15) or (cap1-15<0 and 256-trigger_pos[e]+cap1<15):
 							continue
 						else:
 							r.append(e)
-					x.append(ydata2[r,channel, cap2] + ydata2[r,channel, cap1])
-					y.append(ydata2[r,channel, cap1] - ydata2[r,channel, cap2])
-					#Cuts
-					y[iCap] = y[iCap][(x > 1200) | (x < -1200)]
-					x[iCap] = x[iCap][(x > 1200) | (x < -1200)]
-					y[iCap] = y[iCap][(x > 4) | (x < 2.3)]
-					x[iCap] = x[iCap][(x > 4) | (x < 2.3)]
+					x_tmp = (ydata2[r,channel, cap2] + ydata2[r,channel, cap1])
+					y_tmp = (ydata2[r,channel, cap1] - ydata2[r,channel, cap2])
+					indarray = np.argsort(x_tmp)
+					xpeak_plus = np.median(x_tmp[indarray[-nevents//10:]])
+					x_zero = np.median(x_tmp)
 
+					indarray = np.argsort(y_tmp)
+					ypeak_plus = np.median(y_tmp[indarray[-nevents//10:]])
+					y_zero = np.median(y_tmp)
+
+					#Remove outliers
+					r0 = [r0 for r0 in range(len(y_tmp)) if ((x_tmp[r0]-x_zero)/xpeak_plus)**2+((y_tmp[r0]-y_zero)/ypeak_plus)**2<1.5]
+					y = y_tmp[r0]
+					x = x_tmp[r0]
 					# Formulate and solve the least squares problem ||Ax - b ||^2
 					
-					A = np.column_stack([x[iCap]**2, x[iCap] * y[iCap], y[iCap]**2, x[iCap], y[iCap]])
-					b = np.ones_like(x[iCap])
+					A = np.column_stack([x**2, x * y, y**2, x, y])
+					b = np.ones_like(x)
 					lstsq = np.linalg.lstsq(A, b, rcond=None)
 					fit = lstsq[0].squeeze()
 
@@ -374,10 +381,10 @@ class Util:
 						chTimeStdevMatrix.append(res*dtij)
 						if(VERBOSE and diff == 1):
 							plt.title("Channel %d, cap %d vs cap %d, t0 %d[ps], %d events"%(channel, cap1, cap2, dtij*1e12, len(x)))
-							plt.scatter(x[iCap], y[iCap])
+							plt.scatter(x, y)
 							# Plot the least squares ellipse
-							x_coord = np.linspace(1.05*x[iCap].min(),1.05*x[iCap].max(),300)
-							y_coord = np.linspace(1.05*y[iCap].min(),1.05*y[iCap].max(),300)
+							x_coord = np.linspace(1.05*x.min(),1.05*x.max(),300)
+							y_coord = np.linspace(1.05*y.min(),1.05*y.max(),300)
 							X_coord, Y_coord = np.meshgrid(x_coord, y_coord)
 							Z_coord = fit[0] * (X_coord ** 2) + fit[1] * X_coord* Y_coord + fit[2] * Y_coord**2+ fit[3] * X_coord+ fit[4] * Y_coord
 							plt.contour(X_coord, Y_coord, Z_coord, levels=[1], colors=('r'), linewidths=2)
@@ -452,6 +459,8 @@ class Util:
 						cap2 = iCap+256+diff
 						if(diff>1 and iCap+diff>255):continue
 						r = []
+
+						#Find the events that are not close to the trigger.
 						for e in range(bin*binsize,min(bin*binsize+binsize, nevents)):
 							if  abs(trigger_pos[e]-cap1)<15 or (trigger_pos[e]-15<0 and 256-cap1+trigger_pos[e]<15) or (cap1-15<0 and 256-trigger_pos[e]+cap1<15):
 								continue
@@ -466,6 +475,8 @@ class Util:
 						indarray = np.argsort(y_tmp)
 						ypeak_plus = np.median(y_tmp[indarray[-binsize//10:]])
 						y_zero = np.median(y_tmp)
+
+						#Remove outliers
 						r0 = [r0 for r0 in range(len(y_tmp)) if ((x_tmp[r0]-x_zero)/xpeak_plus)**2+((y_tmp[r0]-y_zero)/ypeak_plus)**2<1.5]
 						y = y_tmp[r0]
 						x = x_tmp[r0]

@@ -616,8 +616,7 @@ class Util:
 				
 
 		return stddevs
-	
-	def plot_ellipses_histeresis(self):
+		def plot_ellipses_histeresis(self):
 		timebase = np.zeros((30, 256), dtype=np.float64)
 
 		if ERRORBAR:
@@ -635,6 +634,7 @@ class Util:
 
 		# A subset is larger than a bin and is used to split up super large data so millions of events are not allocated to memory all at once
 		offsets = []
+		offsets_times = []
 		subsetstart = 0
 		while subsetstart < nevents:
 
@@ -653,14 +653,14 @@ class Util:
 				a_matrix = []
 				y_matrix = []
 				w_matrix = []
-				for diff in [1,2,3,4,5,6]:
+				for diff in [1]:
 					binsize = self.measurement_config["timebase"]["binsize"]
-					chTimeOffsetBinMatrix = []
-					chTimeStdevBinMatrix = []
 					for iCap in range(256):
 						full_x, full_y = [], []
 						if WRAPAROUND_ONLY and iCap != 255:
 							continue
+						chTimeOffsetBinMatrix = []
+						chTimeStdevBinMatrix = []
 						binErrs = []
 						for bin in range(subsetsize//binsize):
 							repetitions = 1
@@ -720,8 +720,6 @@ class Util:
 								lstsq = np.linalg.lstsq(A, b, rcond=None)
 								fit = lstsq[0].squeeze()
 								res = np.sqrt(lstsq[1]/(np.size(b)-2))# res is unitless because we are fitting the ellipse to 1, a unitless quantity.
-								if(diff==1 and iCap == 255):
-									res = res/6
 								coefs.append(fit)
 								#print(fit)
 								try:
@@ -733,6 +731,7 @@ class Util:
 									#print("b = %f"%b)
 
 									dtij = math.atan(b/a)/(math.pi*true_freq)
+									offsets_times.append(times320[bin*binsize])
 									#print("dtij = %f ps"%(dtij*1e12))
 			
 									# if dtij < 680e-12:
@@ -766,7 +765,7 @@ class Util:
 										if(not WRAPAROUND_ONLY or iCap == 255):
 											plt.clf()
 											if not ERRORBAR:
-												plt.title(f"Channel {channel}, cap {cap1} vs cap {cap2}, t0 {round(dtij*1e12, 3)}[ps], {len(x)} events")
+												plt.title(f"Channel {channel}, cap {cap1} vs cap {cap2}, t0 {round(dtij*1e12, decimals=2)}[ps], {len(x)} events")
 											else:
 												plt.title(f"Channel {channel}, cap {cap1} vs cap {cap2}, t0 {round(dtij*1e12, binErrs[-1]*1e12)}[ps], {len(x)} events")
 											plt.scatter(x, y)
@@ -788,39 +787,26 @@ class Util:
 										chTimeOffsetBinMatrix.append(100.0e-12*diff)
 										chTimeStdevBinMatrix.append(np.array([30.0*diff]))
 						offsets.extend(chTimeOffsetBinMatrix)
-					vsize = 256-diff
-					if(diff==1):
-						vsize = 256
-
-					arr = np.zeros((vsize,256))
-					for i in range(vsize):
-						for j in range(256):#Do not include wraparound terms for diff>1
-							if(j-i>=0 and j-i<diff):
-								arr[i,j] = 1
-							if(i>=256 and j==256):
-								arr[i,j] = 1
-					a_matrix.append(arr)
-					y_matrix.append(np.array(chTimeOffsetBinMatrix))
-					w_matrix.append(np.array(chTimeStdevBinMatrix))
 														
 		if(iCap == 255):
-
-			# plt.clf()
-			# plt.title("Time Offset Change Over Time, 1000Hz Trigger Rate, 0x300 dll_vdd")
-			# plt.xlabel("Time [s]")
-			# plt.ylabel("Timebase [s]")
-			# if not ERRORBAR:
-			# 	plt.step(np.array([times320[bin*binsize]/320e6 for bin in range(nevents//binsize)]).flatten(), np.array(chTimeOffsetBinMatrix).flatten())
+			offsets = np.array(offsets).flatten()
+			offsets_times = np.array(offsets_times).flatten()
+			plt.clf()
+			plt.title("Time Offset Change Over Time")
+			plt.xlabel("Time [s]")
+			plt.ylabel("Time offset (ps)")
+			if not ERRORBAR:
+				plt.step(offsets_times, 1e12*offsets)
 			# else:
-			# 	# plt.errorbar(np.array([times320[bin*binsize]/320e6 for bin in range(nevents//binsize)]).flatten(), np.array(chTimeOffsetBinMatrix).flatten(), np.array(chTimeStdevBinMatrix).flatten(), ecolor="black")
+			#	# plt.errorbar(np.array([times320[bin*binsize]/320e6 for bin in range(nevents//binsize)]).flatten(), np.array(chTimeOffsetBinMatrix).flatten(), np.array(chTimeStdevBinMatrix).flatten(), ecolor="black")
 			# 	plt.errorbar(np.array([times320[bin*binsize]/320e6 for bin in range(nevents//binsize)]).flatten(), np.array(chTimeOffsetBinMatrix).flatten(), np.array(binErrs), ecolor="black")
-			# plt.savefig("plots/channel%d_timeOffsetFluctuation.png"%(channel))
+			plt.savefig("plots/channel%d_timeOffsetFluctuation.png"%(channel))
 
 			offsets = np.array(offsets).flatten()
 			plt.clf()
-			plt.title(f"Time Offset Change Histogram, 1000Hz Trigger Rate, 0x300 dll_vdd,\n$\sigma={round(np.std(offsets)*1e12, 2)}$ ps")
-			plt.xlabel("Time [s]")
-			plt.ylabel("Timebase [s]")
+			plt.title(f"Time Offset Change Histogram,\n$\mu={round(np.mean(offsets)*1e12, decimals=2)}$ ps, $\sigma={round(np.std(offsets)*1e12, decimals=2)}$ ps")
+			plt.xlabel("Time offset (ps)")
+			plt.ylabel("Number of event-groupings")
 			plt.hist(offsets*1e12, bins=100)
 			plt.savefig("plots/channel%d_timeOffsetFluctuation_HIST.png"%(channel))
 

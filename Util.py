@@ -643,6 +643,8 @@ class Util:
 			subsetstart += subsetsize
 
 			trigger_pos = (((times320+2+2)%8)*32-16)%256
+			trigger_pos += self.measurement_config["timebase"]["trigger_offset"]
+			trigger_pos %= 256
 			sineData = self.linearize_voltage(sineData) - 1.2/4096*self.measurement_config["timebase"]["pedestal"]
 			true_freq = self.measurement_config["timebase"]["true_freq"]#Frequency of the signal source used for timebase measurement.
 			

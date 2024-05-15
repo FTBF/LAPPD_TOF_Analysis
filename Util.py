@@ -616,7 +616,8 @@ class Util:
 				
 
 		return stddevs
-		def plot_ellipses_histeresis(self):
+
+	def plot_ellipses_histeresis(self):
 		timebase = np.zeros((30, 256), dtype=np.float64)
 
 		if ERRORBAR:

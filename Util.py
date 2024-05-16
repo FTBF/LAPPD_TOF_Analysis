@@ -1492,8 +1492,18 @@ class Util:
 		trigger_pos = (((times320+2+2)%8)*32-16)%256
 		trigger_high = (((times320+2+2)%8)*32+24)%256
 		if(VERBOSE):
-			print("320MHz counter modulo 8 histogram for all events:")
-			print(np.histogram(times320 % 8, bins = [0, 1,2,3,4,5,6,7])[0])
+			trigger_octants = (trigger_pos-16)/32
+			print('Trigger octant histogram:')
+			print(np.histogram(trigger_octants, bins=np.linspace(0,8,9,dtype=int))[0])
+			print('')
+			fig, ax = plt.subplots()
+			ax.hist(trigger_pos, bins=np.linspace(0, 256, 257))
+			ax.set_xlabel('Trigger position (sample)', fontdict=dict(size=14))
+			ax.set_ylabel('Number of events per 1 sample bins', fontdict=dict(size=14))
+			ax.xaxis.set_ticks_position('both')
+			ax.yaxis.set_ticks_position('both')
+			plt.minorticks_on()
+			plt.show()
 		for event in events:
 			plt.title(f"Time offset and voltage calibration, Event {event}")
 			plt.xlabel("time [s]")

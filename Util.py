@@ -625,6 +625,7 @@ class Util:
 
 		subsetsize = self.measurement_config["timebase"]["subsetsize"]
 		nevents = self.measurement_config["timebase"]["nevents"]
+		binsize = self.measurement_config["timebase"]["binsize"]
 		if not subsetsize:
 			subsetsize = nevents
 		
@@ -633,9 +634,11 @@ class Util:
 		else:	# not sure if this else statement is working like create_timebase_weighted()
 			file_path = self.measurement_config["timebase"]["prefix"]+str(channel)+self.measurement_config["timebase"]["suffix"]
 
+		channels = self.measurement_config["timebase"]["channels"]
+
 		# A subset is larger than a bin and is used to split up super large data so millions of events are not allocated to memory all at once
-		offsets = []
-		offsets_times = []
+		offsets = np.zeros((len(channels), nevents//binsize), dtype=np.float64)
+		offsets_times = np.zeros((len(channels), nevents//binsize), dtype=np.float64)
 		subsetstart = 0
 		while subsetstart < nevents:
 
@@ -651,13 +654,13 @@ class Util:
 			ydata = sineData
 			ydata2 = np.concatenate((ydata, ydata, ydata), axis=2)
 
-			for channel in self.measurement_config["timebase"]["channels"]:
+			for iChannel, channel in enumerate(channels):
 				
 				a_matrix = []
 				y_matrix = []
 				w_matrix = []
 				for diff in [1]:
-					binsize = self.measurement_config["timebase"]["binsize"]
+					
 					for iCap in range(256):
 						full_x, full_y = [], []
 						if WRAPAROUND_ONLY and iCap != 255:
@@ -1366,73 +1369,7 @@ class Util:
 		self.plot(xdataList[event], ydataList[event] - Util.sine(xdataList[event], *coefs[event, channel]))
 		self.plot(xdataList[event]+ydot[event]*np.dot(reorder[event], parameters), ydataList[event] - Util.sine(xdataList[event]+ydot[event]*np.dot(reorder[event], parameters), *coefs[event, channel]))
 		pass
-
-
-
-
-
-	def plot(self, xdata, ydata):
-		plt.title("Outlying event")
-		plt.xlabel("time [s]")
-		plt.ylabel("Voltage [V]")
-		for channel in [11]:
-			plt.plot(xdata[channel], ydata[channel])
-		plt.legend(loc="lower right")
-		plt.show()
-	def raw_plot(self):
-		events = self.measurement_config["plot"]["event"]
-		times320, times, rawData = Util.getDataRaw([self.measurement_config["plot"]["input"]])
-		if VERBOSE:
-			print("320MHz counter modulo 8 histogram for all events:")
-			print(np.histogram(times320 % 8, bins = [0, 1,2,3,4,5,6,7])[0])
-		for event in events:
-			if VERBOSE:
-				print("320MHz:")
-				print(times320[event])
-				print("1PPS:")
-				print((times[event] >> 32 ) & 0xffffffff)
-				print("250MHz:")
-				print(times[event] & 0xffffffff)
-			plt.title(f"Time offset and voltage calibration, Event {event}")
-			plt.xlabel("time [s]")
-			plt.ylabel("Voltage [V]")
-			for channel in [0,1,2,3,4,5]:
-				plt.plot(np.linspace(0, 255,256), rawData[event, channel, :], label=str(channel))
-			plt.axvline((((times320[event]) % 8))*32-16)
-			plt.legend(loc="lower right")
-			plt.show()
-			plt.title(f"Time offset and voltage calibration, Event {event}")
-			plt.xlabel("time [s]")
-			plt.ylabel("Voltage [V]")
-			for channel in [6,7,8,9,10,11]:
-				plt.plot(np.linspace(0, 255,256), rawData[event, channel, :], label=str(channel))
-			plt.axvline((((times320[event]) % 8))*32-16)
-			plt.legend(loc="lower right")
-			plt.show()
-			plt.title(f"Time offset and voltage calibration, Event {event}")
-			plt.xlabel("time [s]")
-			plt.ylabel("Voltage [V]")
-			for channel in [12,13,14,15,16,17]:
-				plt.plot(np.linspace(0, 255,256), rawData[event, channel, :], label=str(channel))
-			plt.axvline((((times320[event]) % 8))*32-16)
-			plt.legend(loc="lower right")
-			plt.show()
-			plt.title(f"Time offset and voltage calibration, Event {event}")
-			plt.xlabel("time [s]")
-			plt.ylabel("Voltage [V]")
-			for channel in [18,19,20,21,22,23]:
-				plt.plot(np.linspace(0, 255,256), rawData[event, channel, :], label=str(channel))
-			plt.axvline((((times320[event]) % 8))*32-16)
-			plt.legend(loc="lower right")
-			plt.show()
-			plt.title(f"Time offset and voltage calibration, Event {event}")
-			plt.xlabel("time [s]")
-			plt.ylabel("Voltage [V]")
-			for channel in [24,25,26,27,28,29]:
-				plt.plot(np.linspace(0, 255,256), rawData[event, channel, :], label=str(channel))
-			plt.axvline((((times320[event]) % 8))*32-16)
-			plt.legend(loc="lower right")
-			plt.show()
+	
 	def plot_with_timebase(self):
 		events = self.measurement_config["plot"]["event"]
 		times320, times, rawData = Util.getDataRaw([self.measurement_config["plot"]["input"]])
@@ -1484,11 +1421,14 @@ class Util:
 			plt.legend(loc="lower right")
 			plt.show()
 
-	def simple_plot(self):
+	def plot(self, mode='r'):
 		events = self.measurement_config["plot"]["event"]
 		nevents = self.measurement_config["plot"]["nevents"]
 		times320, times, rawData = Util.getDataRaw([self.measurement_config["plot"]["input"]], batchsize=nevents)
-		sineData = self.linearize_voltage(rawData) - 1.2/4096*self.measurement_config["plot"]["pedestal"]
+		if mode == 'r':
+			data = rawData
+		if mode == 'p':
+			data = self.linearize_voltage(rawData) - 1.2/4096*self.measurement_config["plot"]["pedestal"]
 		trigger_pos = (((times320+2+2)%8)*32-16)%256
 		trigger_high = (((times320+2+2)%8)*32+24)%256
 		if(VERBOSE):
@@ -1505,11 +1445,15 @@ class Util:
 			plt.minorticks_on()
 			plt.show()
 		for event in events:
+			if VERBOSE:
+				print(f"320MHz: {times320[event]}")
+				print(f"1PPS: {(times[event] >> 32 ) & 0xffffffff}")
+				print(f"250MHz: {times[event] & 0xffffffff}")
 			plt.title(f"Time offset and voltage calibration, Event {event}")
 			plt.xlabel("time [s]")
 			plt.ylabel("Voltage [V]")
 			for channel in [0,1,2,3,4,5]:
-				plt.plot(np.linspace(0, 255,256), sineData[event, channel, :], label=str(channel))
+				plt.plot(np.linspace(0, 255,256), data[event, channel, :], label=str(channel))
 			plt.axvline(trigger_pos[event], color='green')
 			plt.axvline(trigger_high[event], color='red')
 			plt.legend(loc="lower right")
@@ -1518,7 +1462,7 @@ class Util:
 			plt.xlabel("time [s]")
 			plt.ylabel("Voltage [V]")
 			for channel in [6,7,8,9,10,11]:
-				plt.plot(np.linspace(0, 255,256), sineData[event, channel, :], label=str(channel))
+				plt.plot(np.linspace(0, 255,256), data[event, channel, :], label=str(channel))
 			plt.axvline(trigger_pos[event], color='green')
 			plt.axvline(trigger_high[event], color='red')
 			plt.legend(loc="lower right")
@@ -1527,7 +1471,7 @@ class Util:
 			plt.xlabel("time [s]")
 			plt.ylabel("Voltage [V]")
 			for channel in [12,13,14,15,16,17]:
-				plt.plot(np.linspace(0, 255,256), sineData[event, channel, :], label=str(channel))
+				plt.plot(np.linspace(0, 255,256), data[event, channel, :], label=str(channel))
 			plt.axvline(trigger_pos[event], color='green')
 			plt.axvline(trigger_high[event], color='red')
 			plt.legend(loc="lower right")
@@ -1536,7 +1480,7 @@ class Util:
 			plt.xlabel("time [s]")
 			plt.ylabel("Voltage [V]")
 			for channel in [18,19,20,21,22,23]:
-				plt.plot(np.linspace(0, 255,256), sineData[event, channel, :], label=str(channel))
+				plt.plot(np.linspace(0, 255,256), data[event, channel, :], label=str(channel))
 			plt.axvline(trigger_pos[event], color='green')
 			plt.axvline(trigger_high[event], color='red')
 			plt.legend(loc="lower right")
@@ -1545,7 +1489,7 @@ class Util:
 			plt.xlabel("time [s]")
 			plt.ylabel("Voltage [V]")
 			for channel in [24,25,26,27,28,29]:
-				plt.plot(np.linspace(0, 255,256), sineData[event, channel, :], label=str(channel))
+				plt.plot(np.linspace(0, 255,256), data[event, channel, :], label=str(channel))
 			plt.axvline(trigger_pos[event], color='green')
 			plt.axvline(trigger_high[event], color='red')
 			plt.legend(loc="lower right")
@@ -1669,9 +1613,9 @@ if __name__ == "__main__":
 	if 'E' in ut.measurement_config["tasks"]:
 		ERRORBAR = True
 	if 'r' in ut.measurement_config["tasks"]:
-		ut.raw_plot()
+		ut.plot()
 	if 'p' in ut.measurement_config["tasks"]:
-		ut.simple_plot()
+		ut.plot(mode='p')
 	if 'P' in ut.measurement_config["tasks"]:
 		ut.plot_with_timebase()
 	if 'e' in ut.measurement_config["tasks"]:

@@ -1423,17 +1423,20 @@ class Util:
 
 	def plot(self, mode='r'):
 
+		# Metadata
 		events = self.measurement_config["plot"]["event"]
 		nevents = self.measurement_config["plot"]["nevents"]
 		trigger_thresh = self.measurement_config["plot"]["trigger_threshold"]
 
+		# Reads in file and calibrates it based off mode (tasks in .yml config file)
 		times320, times, rawData = Util.getDataRaw([self.measurement_config["plot"]["input"]], batchsize=nevents)
 		if mode == 'r':
 			data = rawData
 		if mode == 'p':
 			data = self.linearize_voltage(rawData) - 1.2/4096*self.measurement_config["plot"]["pedestal"]
-			trigger_thresh = 1.2*trigger_thresh/4096
+			if trigger_thresh: trigger_thresh *= 1.2/4096.
 
+		# Beginning and end of trigger octant
 		trigger_pos = (((times320+2+2)%8)*32-16)%256
 		trigger_high = (((times320+2+2)%8)*32+24)%256
 
@@ -1450,16 +1453,18 @@ class Util:
 			ax.yaxis.set_ticks_position('both')
 			plt.minorticks_on()
 			plt.show()
+			
 		for event in events:
 			if VERBOSE:
 				print(f"320MHz: {times320[event]}")
 				print(f"1PPS: {(times[event] >> 32 ) & 0xffffffff}")
 				print(f"250MHz: {times[event] & 0xffffffff}")
-			plt.title(f"Time offset and voltage calibration, Event {event}")
-			plt.xlabel("time [s]")
-			plt.ylabel("Voltage [V]")
+			
 			for chip in range(5):
 				channels = np.linspace(6*chip, 6*chip+5, 6, dtype=int)
+				plt.title(f"Time offset and voltage calibration, Event {event}")
+				plt.xlabel("time [s]")
+				plt.ylabel("Voltage [V]")
 				for channel in channels:
 					plt.plot(np.linspace(0, 255,256), data[event, channel, :], label=str(channel))
 				plt.axvline(trigger_pos[event], color='green')
@@ -1468,9 +1473,6 @@ class Util:
 					plt.axhline(trigger_thresh, color='black')
 				plt.legend(loc="lower right")
 				plt.show()
-				plt.title(f"Time offset and voltage calibration, Event {event}")
-				plt.xlabel("time [s]")
-				plt.ylabel("Voltage [V]")
 
 	def savitzky_golay(y, window_size, order, deriv=0, rate=1):
 		from math import factorial

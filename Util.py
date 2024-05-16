@@ -636,9 +636,10 @@ class Util:
 
 		channels = self.measurement_config["timebase"]["channels"]
 
+		wraparounds = np.zeros((len(channels), nevents//binsize), dtype=np.float64)
+		offsets_times = []
+
 		# A subset is larger than a bin and is used to split up super large data so millions of events are not allocated to memory all at once
-		offsets = np.zeros((len(channels), nevents//binsize), dtype=np.float64)
-		offsets_times = np.zeros((len(channels), nevents//binsize), dtype=np.float64)
 		subsetstart = 0
 		while subsetstart < nevents:
 
@@ -737,7 +738,8 @@ class Util:
 									#print("b = %f"%b)
 
 									dtij = math.atan(b/a)/(math.pi*true_freq)
-									offsets_times.append(times320[bin*binsize])
+									if iChannel == 0:
+										offsets_times.append(times320[bin*binsize])
 									#print("dtij = %f ps"%(dtij*1e12))
 			
 									# if dtij < 680e-12:
@@ -768,6 +770,8 @@ class Util:
 
 										chTimeOffsetBinMatrix.append(dtij)
 										chTimeStdevBinMatrix.append(res*dtij)
+										wraparounds[iChannel, (subsetstart-subsetsize)//binsize + bin] = dtij
+
 										if(not WRAPAROUND_ONLY or iCap == 255):
 											plt.clf()
 											if not ERRORBAR:
@@ -792,34 +796,36 @@ class Util:
 									if iRep == 0:
 										chTimeOffsetBinMatrix.append(100.0e-12*diff)
 										chTimeStdevBinMatrix.append(np.array([30.0*diff]))
-						offsets.extend(chTimeOffsetBinMatrix)
-														
-		if(iCap == 255):
-			offsets = np.array(offsets).flatten()
-			offsets_times = np.array(offsets_times).flatten()
-			plt.clf()
-			plt.title("Time Offset Change Over Time")
-			plt.xlabel("Time [s]")
-			plt.ylabel("Time offset (ps)")
-			if not ERRORBAR:
-				plt.step(offsets_times, 1e12*offsets)
-			# else:
-			#	# plt.errorbar(np.array([times320[bin*binsize]/320e6 for bin in range(nevents//binsize)]).flatten(), np.array(chTimeOffsetBinMatrix).flatten(), np.array(chTimeStdevBinMatrix).flatten(), ecolor="black")
-			# 	plt.errorbar(np.array([times320[bin*binsize]/320e6 for bin in range(nevents//binsize)]).flatten(), np.array(chTimeOffsetBinMatrix).flatten(), np.array(binErrs), ecolor="black")
-			plt.savefig("plots/channel%d_timeOffsetFluctuation.png"%(channel))
 
-			offsets = np.array(offsets).flatten()
-			plt.clf()
-			plt.title(f"Time Offset Change Histogram,\n$\mu={round(np.mean(offsets)*1e12, decimals=2)}$ ps, $\sigma={round(np.std(offsets)*1e12, decimals=2)}$ ps")
-			plt.xlabel("Time offset (ps)")
-			plt.ylabel("Number of event-groupings")
-			plt.hist(offsets*1e12, bins=100)
-			plt.savefig("plots/channel%d_timeOffsetFluctuation_HIST.png"%(channel))
+		if WRAPAROUND_ONLY:
+			for iChannel, channel in enumerate(channels):
 
-						# plt.clf()
-						# fig, ax = plt.subplots()
-						# ax.scatter(np.concatenate(full_x), np.concatenate(full_y))
-						# plt.show()
+				offsets = wraparounds[iChannel,:]
+				print(offsets)
+				offsets_times = np.array(offsets_times).flatten()
+				plt.clf()
+				plt.title("Time Offset Change Over Time")
+				plt.xlabel("Time [s]")
+				plt.ylabel("Time offset (ps)")
+				if not ERRORBAR:
+					plt.step(offsets_times, 1e12*offsets)
+				# else:
+				#	# plt.errorbar(np.array([times320[bin*binsize]/320e6 for bin in range(nevents//binsize)]).flatten(), np.array(chTimeOffsetBinMatrix).flatten(), np.array(chTimeStdevBinMatrix).flatten(), ecolor="black")
+				# 	plt.errorbar(np.array([times320[bin*binsize]/320e6 for bin in range(nevents//binsize)]).flatten(), np.array(chTimeOffsetBinMatrix).flatten(), np.array(binErrs), ecolor="black")
+				plt.savefig("plots/channel%d_timeOffsetFluctuation.png"%(channel))
+
+				offsets = np.array(offsets).flatten()
+				plt.clf()
+				plt.title(f"Time Offset Change Histogram,\n$\mu={round(np.mean(offsets)*1e12, decimals=2)}$ ps, $\sigma={round(np.std(offsets)*1e12, decimals=2)}$ ps")
+				plt.xlabel("Time offset (ps)")
+				plt.ylabel("Number of event-groupings")
+				plt.hist(offsets*1e12, bins=100)
+				plt.savefig("plots/channel%d_timeOffsetFluctuation_HIST.png"%(channel))
+
+					# plt.clf()
+					# fig, ax = plt.subplots()
+					# ax.scatter(np.concatenate(full_x), np.concatenate(full_y))
+					# plt.show()
 		return sineData
 
 	#Generates a data file and saves a timebase calibration file.
@@ -1453,7 +1459,7 @@ class Util:
 			ax.yaxis.set_ticks_position('both')
 			plt.minorticks_on()
 			plt.show()
-			
+
 		for event in events:
 			if VERBOSE:
 				print(f"320MHz: {times320[event]}")

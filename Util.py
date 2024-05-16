@@ -1471,39 +1471,6 @@ class Util:
 				plt.title(f"Time offset and voltage calibration, Event {event}")
 				plt.xlabel("time [s]")
 				plt.ylabel("Voltage [V]")
-			# for channel in [6,7,8,9,10,11]:
-			# 	plt.plot(np.linspace(0, 255,256), data[event, channel, :], label=str(channel))
-			# plt.axvline(trigger_pos[event], color='green')
-			# plt.axvline(trigger_high[event], color='red')
-			# plt.legend(loc="lower right")
-			# plt.show()
-			# plt.title(f"Time offset and voltage calibration, Event {event}")
-			# plt.xlabel("time [s]")
-			# plt.ylabel("Voltage [V]")
-			# for channel in [12,13,14,15,16,17]:
-			# 	plt.plot(np.linspace(0, 255,256), data[event, channel, :], label=str(channel))
-			# plt.axvline(trigger_pos[event], color='green')
-			# plt.axvline(trigger_high[event], color='red')
-			# plt.legend(loc="lower right")
-			# plt.show()
-			# plt.title(f"Time offset and voltage calibration, Event {event}")
-			# plt.xlabel("time [s]")
-			# plt.ylabel("Voltage [V]")
-			# for channel in [18,19,20,21,22,23]:
-			# 	plt.plot(np.linspace(0, 255,256), data[event, channel, :], label=str(channel))
-			# plt.axvline(trigger_pos[event], color='green')
-			# plt.axvline(trigger_high[event], color='red')
-			# plt.legend(loc="lower right")
-			# plt.show()
-			# plt.title(f"Time offset and voltage calibration, Event {event}")
-			# plt.xlabel("time [s]")
-			# plt.ylabel("Voltage [V]")
-			# for channel in [24,25,26,27,28,29]:
-			# 	plt.plot(np.linspace(0, 255,256), data[event, channel, :], label=str(channel))
-			# plt.axvline(trigger_pos[event], color='green')
-			# plt.axvline(trigger_high[event], color='red')
-			# plt.legend(loc="lower right")
-			# plt.show()
 
 	def savitzky_golay(y, window_size, order, deriv=0, rate=1):
 		from math import factorial

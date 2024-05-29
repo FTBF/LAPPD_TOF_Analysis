@@ -1437,7 +1437,11 @@ class Util:
 		# Reads in file and calibrates it based off mode (tasks in .yml config file)
 		times320, times, rawData = Util.getDataRaw([self.measurement_config["plot"]["input"]], batchsize=nevents)
 		if mode == 'r':
-			data = rawData
+			data = np.array(rawData, dtype=np.float64)
+			pedDataPath = self.measurement_config["plot"]["pedestalData"]
+			if pedDataPath: 
+				_, _, pedestalData = Util.getDataRaw([pedDataPath])
+				data -= pedestalData.mean(0)
 		if mode == 'p':
 			data = self.linearize_voltage(rawData) - 1.2/4096*self.measurement_config["plot"]["pedestal"]
 			if trigger_thresh: trigger_thresh *= 1.2/4096.

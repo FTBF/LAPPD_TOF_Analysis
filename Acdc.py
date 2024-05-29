@@ -20,16 +20,14 @@ except ImportError:
 
 MAX_PROCESSES = 1
 CALIB_ADC = True
-CALIB_TIME_BASE = False
+CALIB_TIME_BASE = True
+SINS_ONLY = True
 QUIET = False
 DEBUG = False
 
 # Globals for debugging purposes only
 all_xh = []
 all_yh = []
-
-all_x = []
-all_y = []
 
 if DEBUG:
 	MAX_PROCESSES = 1
@@ -271,6 +269,10 @@ def gauss_const_back(x, A, c, mu, B):
 def sin_const_back(x, A, omega, phi, B):
 	return A*np.sin(omega*x-phi)+B
 
+@numba.jit(nopython=True)
+def sin_const_back_250(x, A, phi, B):
+	return A*np.sin(2*np.pi*0.25*x-phi)+B
+
 #This class represents the ACDC boards, and thus
 #in proxy an LAPPD - as in the LAPPD TOF system we plan
 #to use one Acdc for each LAPPD, read out in single-ended
@@ -287,10 +289,10 @@ class Acdc:
 		"""Initializes based on a python dict or a yaml file
 		"""
 
+		# Loads configuration file. First checks if it's a yaml file; otherwise treats as Python dict
 		if isinstance(config_data, str):
 			if '.yml' not in config_data:
 				config_data += '.yml'
-
 			try:
 				with open('configs/' + config_data, 'r') as yf:
 					config_data = yaml.safe_load(yf)
@@ -303,8 +305,8 @@ class Acdc:
 
 		# Constants
 		self.chan_rearrange = np.array([5,4,3,2,1,0,11,10,9,8,7,6,17,16,15,14,13,12,23,22,21,20,19,18,29,28,27,26,25,24])
-		self.vel = 144.
-		self.dt = 1.0/(40e6*256)*1e9
+		self.vel = 144.					# mm/ns
+		self.dt = 1.0/(40e6*256)*1e9	# PLL is 40 MHz, DLL is 256 samples, nominal sample spacing = 1/(256*40 MHz)
 				
 		# Metadata
 		self.acdc_id = config_data['acdc_id']			# ACDC number (see inventory), e.g. '46'
@@ -329,13 +331,9 @@ class Acdc:
 		self.wr_calib_offset = np.full(30, 3.26)
 		self.strip_pos = 6.6*np.linspace(0,29,30)	
 
-		# Input data
-		self.times = None
-		self.times_320 = None
-		self.waveforms_raw =None
-
 		# Derived data
-		self.waveforms = None
+		self.waveforms_optch = None
+		self.waveforms_sin = None
 		self.hpos = None
 		self.vpos = None	
 
@@ -479,9 +477,13 @@ class Acdc:
 				print('ACDC sample times calibrated\n')
 
 		else:
-			time_base = np.full(256, self.dt) #+ 0.01*np.random.rand(256)
+			time_base = np.full(256, self.dt) #+ np.random.normal(loc=0., scale=0.010, size=256)
 			time_base[-1] += 0.300
 			time_base = np.tile(time_base, 30).reshape(30, 256)
+			# time_base[:,-1] -= (np.sum(time_base, axis=1) - 25)	# normalizes cumulative samples to 25 ns
+			# if (time_base[:,-1] < 0).any():
+			# 	print('Error: wrap-around offset less than 0')
+			# 	exit()
 
 			if not QUIET:
 				print('ACDC sample times NOT calibrated\n')
@@ -502,7 +504,10 @@ class Acdc:
 			data = data_raw - self.pedestal_counts
 
 		# Selects optimal y data (voltage) and channels
-		ydata_v, opt_chs, misfire_masks = self.v_data_opt_ch(data)
+		if SINS_ONLY:
+			ydata_v, opt_chs, misfire_masks = np.full((times_320.shape[0], 256), 0), np.full(times_320.shape[0], 0), np.full((times_320.shape[0], 256), True)
+		else:
+			ydata_v, opt_chs, misfire_masks = self.v_data_opt_ch(data)
 		xdata_v = np.tile(np.copy(self.strip_pos), ydata_v.shape[0]).reshape(ydata_v.shape[0], 30)
 		# xdata_v = np.tile(np.delete(np.copy(self.strip_pos), self.sync_ch), ydata_v.shape[0]).reshape(ydata_v.shape[0], 29)
 
@@ -510,7 +515,7 @@ class Acdc:
 
 		# Adjusts trigger position
 		trigger_low = (((times_320+2+2)%8)*32-16)%256
-		trigger_high = (((times_320+2+2)%8)*32+24)%256
+		# trigger_high = (((times_320+2+2)%8)*32+24)%256
 	
 		xdata_h = np.copy(self.time_base)[opt_chs,:]
 		xdata_h = np.array([np.roll(np.copy(xdata_h[i,:]), -trigger_low[i]) for i in range(num_events)])
@@ -541,6 +546,14 @@ class Acdc:
 			all_yh = np.array([np.roll(np.copy(data[i,:,:]), -trigger_low[i], axis=1) for i in range(num_events)])
 			# all_yh = np.copy(data)
 			# all_xh = np.tile(np.tile(np.linspace(0,255,256,dtype=int),30), num_events).reshape(num_events, 30, 256)
+   
+		# for event in [500,1500,2500,3500,4500,5500,6500,7500,8500,9500]:
+		# 	fig, ax = plt.subplots()
+		# 	ax.set_title(f'Event {event}')
+		# 	wrap = xdata_sine[event, :][np.append(np.diff(xdata_sine[event, :]) > 0.300, False)]
+		# 	ax.plot(xdata_sine[event, :], ydata_sine[event, :])
+		# 	ax.axvline(wrap)
+		# 	plt.show()
 
 		return xdata_v, ydata_v, xdata_h, ydata_h, opt_chs, misfire_masks, xdata_sine, ydata_sine, trigger_low
 
@@ -583,10 +596,14 @@ class Acdc:
 		offset_increment = 0.1
 		offsets = np.arange(0, max_offset, offset_increment)
 
+		A_vec = []
+		chi2_vec = []
 		delta_t_vec = []
 		vpos_vec = []
 		phi_vec = []
 		first_peak_vec = []
+		omega_vec = []
+		startcap_vec = []
 
 		# Restricting sin data bounds to exclude trigger samples
 		sin_lbound, sin_rbound = int(4*(256/25)), int(21*(256/25))
@@ -604,138 +621,151 @@ class Acdc:
 		for i, (xv, yv, xh, yh, opt_ch, misfire_mask, xsin, ysin, p0, tl) in enumerate(zip(xdata_v, ydata_v, xdata_h, ydata_h, opt_chs, misfire_masks, xdata_sine_cut, ydata_sine_cut, p0_array, trigger_low)):
 			try:
 
-				xh, yh = xh[misfire_mask], yh[misfire_mask]		
+				wraparound_ind = 255-tl
+				startcap = tl
 
+				xh, yh = xh[misfire_mask], yh[misfire_mask]	
+
+				# fig, ax = plt.subplots()
+				# ax.scatter(xsin, ysin, marker='.', color='black')
+				# plt.show()	
+				
 				# Finds spatial position
-				delta_t, lbound = self.calc_delta_t(xh, yh, offsets)
-				mu0 = xv[opt_ch]
-				vpos = self.calc_vpos(xv, yv, mu0)
+				if SINS_ONLY:
+					delta_t, lbound, vpos = 0, 0, 0
+				else:
+					delta_t, lbound, reflect_ind = self.calc_delta_t(xh, yh, offsets)
+					if wraparound_ind < reflect_ind:	# if wraparound is between peaks throw out event
+						raise
+					mu0 = xv[opt_ch]
+					vpos = self.calc_vpos(xv, yv, mu0)
 				
 				# Fits sine channel for event time reconstruction
-				popt, pcov = curve_fit(sin_const_back, xsin, ysin, p0=p0)
+				if wraparound_ind >= 128 and wraparound_ind < sin_rbound:		# must fit sin wave on leftside of wraparound
+					xsin, ysin = xsin[:wraparound_ind-sin_lbound], ysin[:wraparound_ind-sin_lbound]
+				elif wraparound_ind < 128 and wraparound_ind > sin_lbound:		# must fit sin wave on rightside of wraparound
+					xsin, ysin = xsin[wraparound_ind-sin_lbound+1:], ysin[wraparound_ind-sin_lbound+1:]
+				if len(xsin) < 40:	# if we aren't fitting a full cycle throw event
+					raise
+				# Gets rid of any misfired caps with super low ADC value
+				badcap_cut = ysin > 0.2
+				xsin, ysin = xsin[badcap_cut], ysin[badcap_cut]
+				# if len(xsin) > 60 and np.random.rand() > 0.5:
+				# 	xsin, ysin = xsin[20:], ysin[20:]
 
+				# Variable frequency sine fit
+				param_bounds = ([0.025, 1.4, -3*np.pi, 0.6], [0.4, 1.75, 3*np.pi, 0.9])
+				popt, pcov = curve_fit(sin_const_back, xsin, ysin, p0=p0, bounds=param_bounds)
+
+				# Constant 250 MHz sine fit
+				# popt, pcov = curve_fit(sin_const_back_250, xsin, ysin, p0=(p0[0], p0[2], p0[3]), bounds=([0.025, -3*np.pi, 0.6], [0.4, 3*np.pi, 0.9]))
+				# popt = [popt[0], 2*np.pi*0.25, popt[1], popt[2]]
+
+				# if i > 9000:
+				# 	fig, ax = plt.subplots()
+				# 	ax.scatter(xsin, ysin, marker='.', color='black')
+				# 	xsindomain = np.linspace(xsin[0], xsin[-1], 300)
+				# 	ax.plot(xsindomain, sin_const_back(xsindomain, *popt), color='black', label=f'$\omega={round(popt[1]/(2*np.pi)*1e3, 2)}$')
+				# 	ax.set_title(f'Event #{i}')
+				# 	ax.legend()
+				# 	plt.show()
+
+				# omegaprime = popt[1]/(2*np.pi)*1e3
+				# phiprime = popt[2]%(2*np.pi)
+				# phiprime = phiprime/(2*np.pi*0.25)
+				# if phiprime >= 1.: phiprime -= 4.
+				# if tl == 112 and omegaprime > 246.8 and omegaprime < 248. and phiprime > 0.95 and phiprime < 1.05:
+				# # if tl == 16 and omegaprime > 248.8 and omegaprime < 254.4 and phiprime > 0.95 and phiprime < 1.05:
+				# 	print(i)
+				# 	fig, ax = plt.subplots()
+				# 	ax.scatter(xsin, ysin, marker='.', color='black', label='Raw data')
+				# 	fig_domain = np.linspace(xsin[0], xsin[-1], 200)
+				# 	# ax.plot(fig_domain, sin_const_back(fig_domain, *p0), label='p0')
+				# 	ax.plot(fig_domain, sin_const_back(fig_domain, *popt), label='popt', color='red')
+				# 	ax.set_title(f'$\omega={round(omegaprime,2)}$ MHz, $\phi={round(phiprime,2)}$ ns', fontdict=dict(size=14.5))
+				# 	ax.set_xlabel('Sample time (ns)', fontdict=dict(size=14))
+				# 	ax.set_ylabel('Voltage (V)', fontdict=dict(size=14))
+				# 	ax.legend(loc='upper right')
+				# 	ax.xaxis.set_ticks_position('both')
+				# 	ax.yaxis.set_ticks_position('both')
+				# 	plt.minorticks_on()
+				# 	plt.show()
+				
+				tempphi = (popt[2]%(2*np.pi))/(2*np.pi*0.25)
+				if tempphi>=2: tempphi -= 4.
+				tempomega = popt[1]/(2*np.pi)*1e3
+				if startcap == 144 and tempphi > -1.25 and tempphi < -0.9 and tempomega > 247.5 and tempomega < 248.5:
+				# if i == 480 or i == 1222 or i == 1669 or i == 3239:
+					fig, ax = plt.subplots()
+					ax.set_title(f'Event {i}, trigger {tl}')
+					ax.scatter(xdata_sine[i], ydata_sine[i], marker='.', color='black', label='Raw data')
+					plottingdomain = np.linspace(xsin[0], xsin[-1], 200)
+					ax.plot(plottingdomain, sin_const_back(plottingdomain, *popt), color='red', label='Fit')
+					ax.legend()
+					ax.set_xlabel('Sample time (ns)')
+					ax.set_ylabel('Voltage (V)')
+					ax.xaxis.set_ticks_position('both')
+					ax.yaxis.set_ticks_position('both')
+					plt.minorticks_on()
+					plt.show()
+				# if tempphi>=2: tempphi -= 4.
+				# if startcap == 16 and 1e3*popt[1]/(2*np.pi) > 247.4 and 1e3*popt[1]/(2*np.pi) < 247.8 and tempphi > 0.25 and tempphi < 0.5:
+				# 	fig, ax = plt.subplots()
+				# 	ax.scatter(xdata_sine[i], ydata_sine[i], marker='.', color='black')
+				# 	plottingdomain = np.linspace(xsin[0], xsin[-1], 200)
+				# 	ax.plot(plottingdomain, sin_const_back(plottingdomain, *popt), color='red')
+				# 	plt.show()
+				sinsigma = np.sqrt(np.diag(pcov))
+				# r = ysin - sin_const_back(xsin, *popt)
+				chi2 = sinsigma
+				# chi2 = r.T @ np.linalg.inv(sinsigma) @ r
+				
 				# lbound = 5
 				# delta_t = 4
 				# popt = [1,2,3,4]
 				# vpos = 1
 
+				A_vec.append(popt[0])
+				chi2_vec.append(chi2)
 				delta_t_vec.append(delta_t)
 				vpos_vec.append(vpos)	
 				phi_vec.append(popt[2])
 				first_peak_vec.append(lbound)
+				omega_vec.append(popt[1])
+				startcap_vec.append(startcap)
 
-				# eventlist = [6010,6061,6155,6180,6186,6362,6363,6428,6435,6440,6557,6558,6647,6670,6703,6774,6803,6855,6938]			
-				# eventlist = [6803]
-				# eventlist =[]
-				# if i in eventlist:
-				# 	print(f'{i}: {delta_t}')
-				# 	fig, ax = plt.subplots()
-				# 	ax.scatter(xh, yh, marker='.', color='black')
-				# 	ax.plot(xh, yh, color='black', label=opt_ch)
-				# 	ax.legend()
-				# 	ax.set_xlabel('Sample time (ns)')
-				# 	ax.set_ylabel('Voltage')
-				# 	ax.xaxis.set_ticks_position('both')
-				# 	ax.yaxis.set_ticks_position('both')
-				# 	plt.minorticks_on()
-					
-				# 	fig3, ax3 = plt.subplots()
-				# 	ax3.scatter(xh[misfire_mask], yh[misfire_mask], marker='.', color='black')
-				# 	ax3.plot(xh[misfire_mask], yh[misfire_mask], color='black', label=opt_ch)
-				# 	ax3.legend()
-				# 	ax3.set_xlabel('Sample time (ns)')
-				# 	ax3.set_ylabel('Voltage')
-				# 	ax3.xaxis.set_ticks_position('both')
-				# 	ax3.yaxis.set_ticks_position('both')
-				# 	plt.minorticks_on()
-					
-				# 	fig2, ax2 = plt.subplots()
-				# 	for j in range(0,30):
-				# 		ax2.plot(all_xh[i,j,:], all_yh[i,j,:], label=j)
-				# 	ax2.legend()
-				# 	ax2.set_xlabel('Sample time (ns)')
-				# 	ax2.set_ylabel('Voltage')
-				# 	ax2.xaxis.set_ticks_position('both')
-				# 	ax2.yaxis.set_ticks_position('both')
-				# 	plt.minorticks_on()
-				# 	plt.show()
-				
 			except Exception as err:
 				skipped.append(i)	
-				if DEBUG and (i == 43 or i == 77):
-					print(i)
-					fig, ax = plt.subplots()
-					ax.scatter(xh, yh, marker='.', color='black')
-					ax.plot(xh, yh, color='black', label=opt_ch)
-					ax.set_xlabel('Sample time (cap)')
-					ax.set_ylabel('Voltage')
-					ax.xaxis.set_ticks_position('both')
-					ax.yaxis.set_ticks_position('both')
-					plt.minorticks_on()
-					ax.legend()
-
-					fig2, ax2 = plt.subplots()
-					ax2.scatter(xv, yv, marker='.', color='black')
-					ax2.plot(xv, yv, color='black')
-					ax2.set_xlabel('Strip pos (mm)')
-					ax2.set_ylabel('Voltage')
-					ax2.xaxis.set_ticks_position('both')
-					ax2.yaxis.set_ticks_position('both')
-					plt.minorticks_on()
-
-					fig3, ax3 = plt.subplots()
-					for j in range(0,10):
-						ax3.plot(all_xh[i,j,:], all_yh[i,j,:], label=j)
-					ax3.legend()
-					ax3.set_xlabel('Sample time (cap)')
-					ax3.set_ylabel('Voltage')
-					ax3.xaxis.set_ticks_position('both')
-					ax3.yaxis.set_ticks_position('both')
-					plt.minorticks_on()
-					plt.show()
-
-				# if DEBUG and i > 6000:
-				# 	print(i)
-				# 	# fig, ax = plt.subplots()
-				# 	# ax.scatter(xv, yv, marker='.', color='black')
-				# 	# ax.plot(xv, yv, color='black')
-
-				# 	fig, ax = plt.subplots()
-				# 	ax.scatter(xh, yh, marker='.', color='black')
-				# 	ax.plot(xh, yh, color='black', label=opt_ch)
-				# 	ax.set_xlabel('Sample time (ns)')
-				# 	ax.set_ylabel('Voltage')
-				# 	ax.xaxis.set_ticks_position('both')
-				# 	ax.yaxis.set_ticks_position('both')
-				# 	plt.minorticks_on()
-				# 	ax.legend()
-
-				# 	fig2, ax2 = plt.subplots()
-				# 	for j in range(0,30):
-				# 		ax2.plot(all_xh[i,j,:], all_yh[i,j,:], label=j)
-				# 	ax2.legend()
-				# 	ax2.set_xlabel('Sample time (ns)')
-				# 	ax2.set_ylabel('Voltage')
-				# 	ax2.xaxis.set_ticks_position('both')
-				# 	ax2.yaxis.set_ticks_position('both')
-				# 	plt.minorticks_on()
-				# 	plt.show()
-				# raise err
+				if DEBUG:
+					raise err
 		
 		num_skipped = len(skipped)
+
+		times_wr_vec = np.delete(times, skipped)
+
+		chi2_vec = np.array(chi2_vec)
+
+		A_vec = np.array(A_vec)
+		phi_vec = np.array(phi_vec)
+		phi_vec[A_vec < 0] -= np.pi
+		phi_vec = phi_vec%(2*np.pi)
+		phi_vec = phi_vec/(2*np.pi*0.25)
+		phi_vec[phi_vec >= 2.] -= 4.
+
+		omega_vec = np.array(omega_vec)
 
 		delta_t_vec = np.array(delta_t_vec)
 		first_peak_vec = np.array(first_peak_vec)
 		hpos_vec = 0.5*self.vel*(delta_t_vec - np.delete(self.reflect_time_offset[opt_chs], skipped))
 
-		phi_vec = np.array(phi_vec)%(2*np.pi)
-		phi_vec = phi_vec/(2*np.pi*0.25)
-		phi_vec[phi_vec >= 2.] -= 2.
-		
-		times_calibrated = np.delete(times, skipped) + 1e-9*(-np.delete(xdata_sine[:,255], skipped) + (first_peak_vec-phi_vec) + delta_t_vec - np.delete(self.wr_calib_offset[opt_chs], skipped))
-		# times_calibrated = np.delete(times, skipped)
+		calib_constants = np.delete(self.wr_calib_offset[opt_chs], skipped)
+		eventphi_vec = (first_peak_vec - (200./self.vel - hpos_vec/self.vel)) - phi_vec	# 200 mm = length of LAPPD
 
-		return hpos_vec, vpos_vec, times_calibrated, num_skipped
+		opt_chs = np.delete(opt_chs, skipped)
+		
+		startcap_vec = np.array(startcap_vec)
+		
+		return hpos_vec, vpos_vec, times_wr_vec, eventphi_vec, first_peak_vec, phi_vec, omega_vec, delta_t_vec, opt_chs, chi2_vec, startcap_vec, num_skipped
 
 	def calc_vpos(self, xv, yv, mu0):
 
@@ -755,7 +785,7 @@ class Acdc:
 		Returns the time difference between the two peaks in the waveform.
 		"""
 
-		lbound, rbound = self.leading_edge_bounds(xh, yh)
+		lbound, rbound, reflect_ind = self.leading_edge_bounds(xh, yh)
 
 		lsquares = self.find_lsquares(xh, yh, lbound, rbound, offsets)
 
@@ -792,7 +822,7 @@ class Acdc:
 			ax.axvline(rbound)
 			plt.show()
 
-		return delta_t, lbound
+		return delta_t, lbound, reflect_ind
 
 	def leading_edge_bounds(self, xh, yh):
 
@@ -836,7 +866,7 @@ class Acdc:
 		# ax.axvline(rbound, color='blue')
 		# plt.show()
 
-		return lbound, rbound
+		return lbound, rbound, reflect_ind
 
 	def find_lsquares(self, xh, yh, lbound, rbound, offsets):
 
@@ -854,53 +884,18 @@ class Acdc:
 
 		return avg_lsquares
 
-	def calc_times(self, xdata_sine, ydata_sine, first_peaks, times):
-
-		lbound, rbound = int(4*(256/25)), int(21*(256/25))
-		cut = np.linspace(lbound, rbound, rbound-lbound+1, dtype=int)
-		xdata_sub, ydata_sub = xdata_sine[:,cut], ydata_sine[:,cut]
-
-		B0 = np.average(ydata_sub, axis=1)
-		A0 = np.max(ydata_sub, axis=1) - B0
-		omega0 = np.full_like(B0, 2*np.pi*0.25)
-		phi0 = np.zeros_like(B0)
-		p0_array = np.array([A0, omega0, phi0, B0]).T
-
-		skipped_sin = 0
-		phis = []
-		for i, (xs, ys, p0) in enumerate(zip(xdata_sub, ydata_sub, p0_array)):
-
-			try:
-				
-				popt, pcov = curve_fit(sin_const_back, xs, ys, p0=p0)
-				# fig, ax = plt.subplots()
-				# fig.set_size_inches(10, 8)
-				# ax.scatter(xdata_sine[i], ydata_sine[i], marker='.', color='black')
-				# domain = np.linspace(xdata_sine[i,0], xdata_sine[i,-1], 300)
-				# ax.plot(domain, sin_const_back(domain, *p0), color='green')
-				# ax.plot(domain, sin_const_back(domain, *popt), color='red')
-				# plt.show()
-
-			except:
-				skipped_sin += 0
-		
-		phis = np.array(phis)
-		phis = phis%(2*np.pi)
-
-		pulse_offsets = (omega0*first_peaks) # NEXT TIME - realizing idk how to deal with thrown out events, probably need to lump this in with calc_positions()
-
-		
-		return 
-
 	def process_single_file(self, file_name):
 		times_320, times, data_raw = self.import_raw_data(file_name)
 		preprocess_vec = self.preprocess_data(data_raw, times_320)
-		hpos, vpos, times_calibrated, num_skipped = self.calc_positions(*preprocess_vec, times)
-		return hpos, vpos, times_calibrated, num_skipped
+		waveforms_optch = np.array([preprocess_vec[2], preprocess_vec[3]])
+		waveforms_sin = np.array([preprocess_vec[6], preprocess_vec[7]])
+		analyzed_vec = self.calc_positions(*preprocess_vec, times)
+		return analyzed_vec, waveforms_optch, waveforms_sin
 
 	def process_files(self, file_list):
 
-		times_cal_vec, hpos_vec, vpos_vec, total_skipped = [], [], [], 0
+		waveforms_optch_vec, waveforms_sin_vec = np.empty((2, 0, 256), dtype=np.float64), np.empty((2, 0, 256), dtype=np.float64)
+		hpos_vec, vpos_vec, times_wr_vec, eventphi_vec, first_peak_vec, phi_vec, omega_vec, delta_t_vec, opt_chs_vec, chi2_vec, startcap_vec, total_skipped = [], [], [], [], [], [], [], [], [], [], [], 0
 		t1 = process_time()
 		t3 = time()
 		if MAX_PROCESSES != 1:
@@ -908,19 +903,42 @@ class Acdc:
 				file_list = convert_to_list(file_list)
 				rv = p.map(self.process_single_file, file_list)
 
-			for hpos, vpos, times_calibrated, num_skipped in rv:
-				times_cal_vec.extend(times_calibrated)
+			for analyzed_vec, waveforms_optch, waveforms_sin in rv:
+				hpos, vpos, times_wr, eventphi, first_peak, phi, omega, delta_t, opt_chs, chi2, startcap, num_skipped = analyzed_vec
+				waveforms_optch_vec = np.append(waveforms_optch_vec, waveforms_optch, axis=1)
+				waveforms_sin_vec = np.append(waveforms_sin_vec, waveforms_sin, axis=1)
 				hpos_vec.extend(hpos)
 				vpos_vec.extend(vpos)
+				times_wr_vec.extend(times_wr)
+				eventphi_vec.extend(eventphi)
+				first_peak_vec.extend(first_peak)
+				phi_vec.extend(phi)
+				omega_vec.extend(omega)
+				delta_t_vec.extend(delta_t)
+				opt_chs_vec.extend(opt_chs)
+				chi2_vec.extend(chi2)
+				startcap_vec.extend(startcap)
 				total_skipped += num_skipped
 
 		else:
 			for file_name in file_list:
-				hpos, vpos, times_calibrated, num_skipped = self.process_single_file(file_name)
-				times_cal_vec.extend(times_calibrated)
+				analyzed_vec, waveforms_optch, waveforms_sin = self.process_single_file(file_name)
+				hpos, vpos, times_wr, eventphi, first_peak, phi, omega, delta_t, opt_chs, chi2, startcap, num_skipped = analyzed_vec
+				waveforms_optch_vec = np.append(waveforms_optch_vec, waveforms_optch, axis=1)
+				waveforms_sin_vec = np.append(waveforms_sin_vec, waveforms_sin, axis=1)
 				hpos_vec.extend(hpos)
 				vpos_vec.extend(vpos)
+				times_wr_vec.extend(times_wr)
+				eventphi_vec.extend(eventphi)
+				first_peak_vec.extend(first_peak)
+				phi_vec.extend(phi)
+				omega_vec.extend(omega)
+				delta_t_vec.extend(delta_t)
+				opt_chs_vec.extend(opt_chs)
+				chi2_vec.extend(chi2)
+				startcap_vec.extend(startcap)
 				total_skipped += num_skipped
+
 		t2 = process_time()
 		t4 = time()
 
@@ -929,14 +947,35 @@ class Acdc:
 		print(f'Process time duration: {round(t2-t1, 3)} s')
 		print(f'Wall clock duration: {round(t4-t3, 3)} s')
 
-		# timesort = np.argsort(np.array(times_calibrated))
-
-		self.times = np.array(times_cal_vec)
+		self.waveforms_optch = waveforms_optch
+		self.waveforms_sin = waveforms_sin
 		self.hpos = np.array(hpos_vec)
 		self.vpos = np.array(vpos_vec)
+		self.times_wr = np.array(times_wr_vec)
+		self.eventphi= np.array(eventphi_vec)
+		self.first_peak = np.array(first_peak_vec)
+		self.phi = np.array(phi_vec)
+		self.omega = np.array(omega_vec)
+		self.delta_t = np.array(delta_t_vec)
+		self.opt_chs = np.array(opt_chs_vec)
+		self.chi2 = np.array(chi2_vec)
+		self.startcap = np.array(startcap_vec)
 		self.skipped = total_skipped
 		return
 	
+	def plot_events(self, file_list):
+
+		for file_name in file_list:
+			times_320, times, data_raw = self.import_raw_data(file_name)
+			preprocess_vec = self.preprocess_data(data_raw, times_320)
+			for i in range(len(times)):
+				fig, ax = plt.subplots()
+				for chan in range(0,30):
+					ax.plot(all_xh[i,chan], all_yh[i,chan])
+				plt.show()
+
+		return
+
 	def plot_vccs(self, ch=-1, cap=-1):
 
 		if ch < 0:
@@ -999,7 +1038,7 @@ class Acdc:
 
 	def save_npz(self, file_name):
 
-		np.savez('npz/' + file_name, acdc_id=self.acdc_id, lappd_id=self.lappd_id, acc_id=self.acc_id, station_id=self.station_id, zpos=self.zpos, corner_offset=self.corner_offset, times=self.times, hpos=self.hpos, vpos=self.vpos)
+		np.savez('npz/' + file_name, acdc_id=self.acdc_id, lappd_id=self.lappd_id, acc_id=self.acc_id, station_id=self.station_id, zpos=self.zpos, corner_offset=self.corner_offset, waveforms_optch=self.waveforms_optch, waveforms_sin=self.waveforms_sin, hpos=self.hpos, vpos=self.vpos, times_wr=self.times_wr, eventphi=self.eventphi, first_peak=self.first_peak, phi=self.phi, omega=self.omega, delta_t=self.delta_t, opt_chs=self.opt_chs, chi2=self.chi2, startcap=self.startcap)
 
 		return
 	
@@ -1015,36 +1054,23 @@ class Acdc:
 			self.station_id = data['station_id']
 			self.zpos = data['zpos']
 			self.corner_offset = data['corner_offset']
-			self.times = data['times']
+			self.waveforms_optch = data['waveforms_optch']
+			self.waveforms_sin = data['waveforms_sin']
 			self.hpos = data['hpos']
 			self.vpos = data['vpos']
+			self.times_wr = data['times_wr']
+			self.eventphi = data['eventphi']
+			self.first_peak = data['first_peak']
+			self.phi = data['phi']
+			self.omega = data['omega']
+			self.delta_t = data['delta_t']
+			self.opt_chs = data['opt_chs']
+			self.chi2 = data['chi2']
+			self.startcap = data['startcap']
 
 		return
 
 
-	def index_to_time(self, index, times):
-		"""Implements quick index-to-time using linear interpolation (add more xxx)"""
-
-		def index_to_time_rec(single_index):
-			lower_index = int(single_index)
-			upper_index = lower_index+1
-
-			if upper_index == len(times):
-				return times[-1]
-			else:
-				slope_denominator = (259./25)*(times[upper_index] - times[lower_index])
-				slope = (times[upper_index] - times[lower_index])/round(slope_denominator)
-				return times[lower_index] + slope*single_index
-
-		if not isinstance(index, list) and not isinstance(index, np.ndarray):
-			return index_to_time_rec(index)
-		else:
-			new_array = []
-			for element in index:
-				new_array.append(index_to_time_rec(element))
-			new_array = np.array(new_array)
-			return new_array		
-			
 	# not sure how this one is affected by incorporating sample_times and wrap-around fix xxx 
 	def hist_single_cap_counts_vs_ped(self, ch, cap):
 		"""Plots a histogram of ADC counts for a single capacitor in a channel for all events recorded in the binary file. Also plots a histogram for the pedestal ADC counts of the same capacitor.
@@ -1221,39 +1247,67 @@ if __name__=='__main__':
 		'calib_data_file_path': r'testData/acdc62.root',
 	}
 
+	config60 = {
+		'acdc_id': 60,
+		'lappd_id': 0,
+		'acc_id': 0,
+		'station_id': 0,
+		'sync_ch': 5,
+		'strip_pos': None,
+		'len_cor': None,
+		'times': None,			 # xxx need a better name for this
+		'wraparound': None,
+		'vel': 144,			 # mm/ns, average (~500 MHz - 1GHz) propagation velocity of the strip 
+		'dt': 1.0/(40e6*256)*1e9,	 # nanoseconds, nominal sampling time interval, 1/(clock to PSEC4 x number of samples)
+		# 'pedestal_data_path': r'/home/cameronpoe/Desktop/lappd_tof_container/testData/old_data/Raw_testData_20230615_164912_b0.txt',
+		'pedestal_file_name': r'testData/acdc60/Raw_Pedestal_20240220_132806_b0.txt',
+		'pedestal_counts': None,
+		'pedestal_voltage': None,
+		'voltage_count_curves': None,
+		'calib_file_name': r'testData/acdc60.root',
+		'zpos': 0,
+		'corner_offset': [0,0]
+	}
+
 	config62 = 'acdc62.yml'
 	config52 = 'acdc52.yml'
+	config60 = 'acdc60.yml'
+	config50 = 'acdc50.yml'
 	
 	file_list = [
-		r'testData/Raw_testData_ACC1_20230714_094355_b0.txt',
-		# r'testData/Raw_testData_ACC1_20230714_094508_b0.txt',
-		# r'testData/Raw_testData_ACC1_20230714_094640_b0.txt',
-		# r'testData/Raw_testData_ACC1_20230714_094737_b0.txt',
-    	# r'testData/Raw_testData_ACC1_20230714_094940_b0.txt',
-    	# r'testData/Raw_testData_ACC1_20230714_095032_b0.txt',
-		# r'testData/Raw_testData_ACC1_20230714_095229_b0.txt',
-    	# r'testData/Raw_testData_ACC1_20230714_095300_b0.txt',
-    	# r'testData/Raw_testData_ACC1_20230714_095543_b0.txt',
-		# r'testData/Raw_testData_ACC2_20230714_091716_b0.txt',
-		# r'testData/Raw_testData_ACC2_20230714_091928_b0.txt',
-		# r'testData/Raw_testData_ACC2_20230714_091957_b0.txt',
-		# r'testData/Raw_testData_ACC2_20230714_092102_b0.txt',
-		# r'testData/Raw_testData_ACC2_20230714_092253_b0.txt',
-		# r'testData/Raw_testData_ACC2_20230714_092536_b0.txt',
-		# r'testData/Raw_testData_ACC2_20230714_092620_b0.txt',
-		# r'testData/Raw_testData_ACC2_20230714_092824_b0.txt',
-		# r'testData/Raw_testData_ACC2_20230714_092904_b0.txt',
+		# 50 V photocathode
+		# 'testData/Raw_testData_ACC2_20230714_094355_b0.txt',
+		# 'testData/Raw_testData_ACC2_20230714_094508_b0.txt',
+		# 'testData/Raw_testData_ACC2_20230714_094640_b0.txt',
+		# 'testData/Raw_testData_ACC2_20230714_094737_b0.txt',
+    	# 'testData/Raw_testData_ACC2_20230714_094940_b0.txt',
+    	# 'testData/Raw_testData_ACC2_20230714_095032_b0.txt',
+		# 'testData/Raw_testData_ACC2_20230714_095229_b0.txt',
+    	# 'testData/Raw_testData_ACC2_20230714_095300_b0.txt',
+    	# 'testData/Raw_testData_ACC2_20230714_095543_b0.txt',
+		# 10 V photocathode
+		# 'testData/Raw_testData_ACC2_20230714_091716_b0.txt',
+		# 'testData/Raw_testData_ACC2_20230714_091928_b0.txt',
+		# 'testData/Raw_testData_ACC2_20230714_091957_b0.txt',
+		# 'testData/Raw_testData_ACC2_20230714_092102_b0.txt',
+		# 'testData/Raw_testData_ACC2_20230714_092253_b0.txt',
+		# 'testData/Raw_testData_ACC2_20230714_092536_b0.txt',
+		# 'testData/Raw_testData_ACC2_20230714_092620_b0.txt',
+		# 'testData/Raw_testData_ACC2_20230714_092824_b0.txt',
+		# 'testData/Raw_testData_ACC2_20230714_092904_b0.txt',
+		# ACDC60 stuff:
+		'testData/acdc60/Raw_testData_ACC1_20240426_103832_b0.txt',
 		]
-
-	test_acdc = Acdc(config62)
+	
+	test_acdc = Acdc(config60)
 
 	test_acdc.calibrate_board()
-	# test_acdc.plot_vccs()
+	# test_acdc.plot_events(file_list)
 	
 	test_acdc.process_files(file_list)
+	test_acdc.save_npz('acdc60_nowrap2_timecal_notnorm_selftrig3000_1')
 
-	test_acdc.save_npz('acdc62')
-	# test_acdc.plot_centers()
+	# test_acdc.load_npz('acdc62_stat2_full')
 
 	exit()
 

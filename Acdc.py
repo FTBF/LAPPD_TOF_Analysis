@@ -22,6 +22,8 @@ MAX_PROCESSES = 1
 CALIB_ADC = True
 CALIB_TIME_BASE = True
 SINS_ONLY = True
+EXCLUDE_WRAP = True
+VAR_SINE_FREQ = True
 QUIET = False
 DEBUG = False
 
@@ -625,10 +627,6 @@ class Acdc:
 				startcap = tl
 
 				xh, yh = xh[misfire_mask], yh[misfire_mask]	
-
-				# fig, ax = plt.subplots()
-				# ax.scatter(xsin, ysin, marker='.', color='black')
-				# plt.show()	
 				
 				# Finds spatial position
 				if SINS_ONLY:
@@ -640,91 +638,41 @@ class Acdc:
 					mu0 = xv[opt_ch]
 					vpos = self.calc_vpos(xv, yv, mu0)
 				
-				# Fits sine channel for event time reconstruction
-				if wraparound_ind >= 128 and wraparound_ind < sin_rbound:		# must fit sin wave on leftside of wraparound
-					xsin, ysin = xsin[:wraparound_ind-sin_lbound], ysin[:wraparound_ind-sin_lbound]
-				elif wraparound_ind < 128 and wraparound_ind > sin_lbound:		# must fit sin wave on rightside of wraparound
-					xsin, ysin = xsin[wraparound_ind-sin_lbound+1:], ysin[wraparound_ind-sin_lbound+1:]
-				if len(xsin) < 40:	# if we aren't fitting a full cycle throw event
-					raise
+				# Excludes wraparound in the sine fit
+				if EXCLUDE_WRAP:
+					# Keeps samples to left of wraparound
+					if wraparound_ind >= 128 and wraparound_ind < sin_rbound:		
+						xsin, ysin = xsin[:wraparound_ind-sin_lbound], ysin[:wraparound_ind-sin_lbound]
+					# Keeps samples to right of wraparound
+					elif wraparound_ind < 128 and wraparound_ind > sin_lbound:		
+						xsin, ysin = xsin[wraparound_ind-sin_lbound+1:], ysin[wraparound_ind-sin_lbound+1:]
+					# Must fit a full period
+					if len(xsin) < 40:
+						raise
+
 				# Gets rid of any misfired caps with super low ADC value
 				badcap_cut = ysin > 0.2
 				xsin, ysin = xsin[badcap_cut], ysin[badcap_cut]
-				# if len(xsin) > 60 and np.random.rand() > 0.5:
-				# 	xsin, ysin = xsin[20:], ysin[20:]
-
-				# Variable frequency sine fit
-				param_bounds = ([0.025, 1.4, -3*np.pi, 0.6], [0.4, 1.75, 3*np.pi, 0.9])
-				popt, pcov = curve_fit(sin_const_back, xsin, ysin, p0=p0, bounds=param_bounds)
-
-				# Constant 250 MHz sine fit
-				# popt, pcov = curve_fit(sin_const_back_250, xsin, ysin, p0=(p0[0], p0[2], p0[3]), bounds=([0.025, -3*np.pi, 0.6], [0.4, 3*np.pi, 0.9]))
-				# popt = [popt[0], 2*np.pi*0.25, popt[1], popt[2]]
-
-				# if i > 9000:
-				# 	fig, ax = plt.subplots()
-				# 	ax.scatter(xsin, ysin, marker='.', color='black')
-				# 	xsindomain = np.linspace(xsin[0], xsin[-1], 300)
-				# 	ax.plot(xsindomain, sin_const_back(xsindomain, *popt), color='black', label=f'$\omega={round(popt[1]/(2*np.pi)*1e3, 2)}$')
-				# 	ax.set_title(f'Event #{i}')
-				# 	ax.legend()
-				# 	plt.show()
-
-				# omegaprime = popt[1]/(2*np.pi)*1e3
-				# phiprime = popt[2]%(2*np.pi)
-				# phiprime = phiprime/(2*np.pi*0.25)
-				# if phiprime >= 1.: phiprime -= 4.
-				# if tl == 112 and omegaprime > 246.8 and omegaprime < 248. and phiprime > 0.95 and phiprime < 1.05:
-				# # if tl == 16 and omegaprime > 248.8 and omegaprime < 254.4 and phiprime > 0.95 and phiprime < 1.05:
-				# 	print(i)
-				# 	fig, ax = plt.subplots()
-				# 	ax.scatter(xsin, ysin, marker='.', color='black', label='Raw data')
-				# 	fig_domain = np.linspace(xsin[0], xsin[-1], 200)
-				# 	# ax.plot(fig_domain, sin_const_back(fig_domain, *p0), label='p0')
-				# 	ax.plot(fig_domain, sin_const_back(fig_domain, *popt), label='popt', color='red')
-				# 	ax.set_title(f'$\omega={round(omegaprime,2)}$ MHz, $\phi={round(phiprime,2)}$ ns', fontdict=dict(size=14.5))
-				# 	ax.set_xlabel('Sample time (ns)', fontdict=dict(size=14))
-				# 	ax.set_ylabel('Voltage (V)', fontdict=dict(size=14))
-				# 	ax.legend(loc='upper right')
-				# 	ax.xaxis.set_ticks_position('both')
-				# 	ax.yaxis.set_ticks_position('both')
-				# 	plt.minorticks_on()
-				# 	plt.show()
 				
-				tempphi = (popt[2]%(2*np.pi))/(2*np.pi*0.25)
-				if tempphi>=2: tempphi -= 4.
-				tempomega = popt[1]/(2*np.pi)*1e3
-				if startcap == 144 and tempphi > -1.25 and tempphi < -0.9 and tempomega > 247.5 and tempomega < 248.5:
-				# if i == 480 or i == 1222 or i == 1669 or i == 3239:
-					fig, ax = plt.subplots()
-					ax.set_title(f'Event {i}, trigger {tl}')
-					ax.scatter(xdata_sine[i], ydata_sine[i], marker='.', color='black', label='Raw data')
-					plottingdomain = np.linspace(xsin[0], xsin[-1], 200)
-					ax.plot(plottingdomain, sin_const_back(plottingdomain, *popt), color='red', label='Fit')
-					ax.legend()
-					ax.set_xlabel('Sample time (ns)')
-					ax.set_ylabel('Voltage (V)')
-					ax.xaxis.set_ticks_position('both')
-					ax.yaxis.set_ticks_position('both')
-					plt.minorticks_on()
-					plt.show()
+				# Fits sine with variable or constant (250 MHz) frequency
+				if VAR_SINE_FREQ:
+					param_bounds = ([0.025, 1.4, -3*np.pi, 0.6], [0.4, 1.75, 3*np.pi, 0.9])
+					popt, pcov = curve_fit(sin_const_back, xsin, ysin, p0=p0, bounds=param_bounds)
+				else:
+					popt, pcov = curve_fit(sin_const_back_250, xsin, ysin, p0=(p0[0], p0[2], p0[3]), bounds=([0.025, -3*np.pi, 0.6], [0.4, 3*np.pi, 0.9]))
+					popt = [popt[0], 2*np.pi*0.25, popt[1], popt[2]]
+				
+				# Temporary fit variables for debugging, since the fit gives omega in rad/ns and phi in rad
+				# tempomega = popt[1]/(2*np.pi)*1e3
+				# tempphi = (popt[2]%(2*np.pi))/(2*np.pi*0.25)
 				# if tempphi>=2: tempphi -= 4.
-				# if startcap == 16 and 1e3*popt[1]/(2*np.pi) > 247.4 and 1e3*popt[1]/(2*np.pi) < 247.8 and tempphi > 0.25 and tempphi < 0.5:
-				# 	fig, ax = plt.subplots()
-				# 	ax.scatter(xdata_sine[i], ydata_sine[i], marker='.', color='black')
-				# 	plottingdomain = np.linspace(xsin[0], xsin[-1], 200)
-				# 	ax.plot(plottingdomain, sin_const_back(plottingdomain, *popt), color='red')
-				# 	plt.show()
+
+				# Currently not good method of getting goodness-of-fit
 				sinsigma = np.sqrt(np.diag(pcov))
 				# r = ysin - sin_const_back(xsin, *popt)
 				chi2 = sinsigma
 				# chi2 = r.T @ np.linalg.inv(sinsigma) @ r
 				
-				# lbound = 5
-				# delta_t = 4
-				# popt = [1,2,3,4]
-				# vpos = 1
-
 				A_vec.append(popt[0])
 				chi2_vec.append(chi2)
 				delta_t_vec.append(delta_t)

@@ -19,11 +19,12 @@ except ImportError:
     from yaml import Loader, Dumper
 
 MAX_PROCESSES = 1
-CALIB_ADC = True
-CALIB_TIME_BASE = True
-SINS_ONLY = True
-EXCLUDE_WRAP = True
-VAR_SINE_FREQ = True
+CALIB_ADC = True			# Toggles whether VCCs are used (true) or simple pedestal subtraction (false)
+CALIB_TIME_BASE = False		# Toggles whether ellipse fit time base is used (true) or not (false)
+NO_POSITIONS = True		# Toggles whether x- and y-positions are reconstructed
+NO_SINES = True				# Toggles whether sync channel sines are fitted
+EXCLUDE_WRAP = True			# Toggles whether wraparound is excluded from sync sine fit
+VAR_SINE_FREQ = False		# Toggles whether sync sine fit frequency is fixed or floating
 QUIET = False
 DEBUG = False
 
@@ -506,7 +507,7 @@ class Acdc:
 			data = data_raw - self.pedestal_counts
 
 		# Selects optimal y data (voltage) and channels
-		if SINS_ONLY:
+		if NO_POSITIONS:
 			ydata_v, opt_chs, misfire_masks = np.full((times_320.shape[0], 256), 0), np.full(times_320.shape[0], 0), np.full((times_320.shape[0], 256), True)
 		else:
 			ydata_v, opt_chs, misfire_masks = self.v_data_opt_ch(data)
@@ -629,7 +630,7 @@ class Acdc:
 				xh, yh = xh[misfire_mask], yh[misfire_mask]	
 				
 				# Finds spatial position
-				if SINS_ONLY:
+				if NO_POSITIONS:
 					delta_t, lbound, vpos = 0, 0, 0
 				else:
 					delta_t, lbound, reflect_ind = self.calc_delta_t(xh, yh, offsets)
@@ -655,7 +656,10 @@ class Acdc:
 				xsin, ysin = xsin[badcap_cut], ysin[badcap_cut]
 				
 				# Fits sine with variable or constant (250 MHz) frequency
-				if VAR_SINE_FREQ:
+				if NO_SINES:
+					popt = [0., 0., 0., 0.]
+					pcov = [0.]
+				elif VAR_SINE_FREQ:
 					param_bounds = ([0.025, 1.4, -3*np.pi, 0.6], [0.4, 1.75, 3*np.pi, 0.9])
 					popt, pcov = curve_fit(sin_const_back, xsin, ysin, p0=p0, bounds=param_bounds)
 				else:
@@ -672,6 +676,16 @@ class Acdc:
 				# r = ysin - sin_const_back(xsin, *popt)
 				chi2 = sinsigma
 				# chi2 = r.T @ np.linalg.inv(sinsigma) @ r
+
+				# fig, ax = plt.subplots()
+				# ax.scatter(xh, yh, marker='.', color='black', label='Raw Data')
+				# ax.plot(xh, yh, color='black')
+				# ax.set_xlabel('Time (ns)', fontdict=dict(size=14))
+				# ax.set_ylabel('Voltage (V)', fontdict=dict(size=14))
+				# ax.xaxis.set_ticks_position('both')
+				# ax.yaxis.set_ticks_position('both')
+				# plt.minorticks_on()
+				# plt.show()
 				
 				A_vec.append(popt[0])
 				chi2_vec.append(chi2)
@@ -1224,7 +1238,7 @@ if __name__=='__main__':
 	
 	file_list = [
 		# 50 V photocathode
-		# 'testData/Raw_testData_ACC2_20230714_094355_b0.txt',
+		'testData/acdc52/Raw_testData_ACC2_20230714_094355_b0.txt',
 		# 'testData/Raw_testData_ACC2_20230714_094508_b0.txt',
 		# 'testData/Raw_testData_ACC2_20230714_094640_b0.txt',
 		# 'testData/Raw_testData_ACC2_20230714_094737_b0.txt',
@@ -1244,16 +1258,17 @@ if __name__=='__main__':
 		# 'testData/Raw_testData_ACC2_20230714_092824_b0.txt',
 		# 'testData/Raw_testData_ACC2_20230714_092904_b0.txt',
 		# ACDC60 stuff:
-		'testData/acdc60/Raw_testData_ACC1_20240426_103832_b0.txt',
+		# 'testData/acdc60/Raw_testData_ACC1_20240426_103832_b0.txt',
 		]
 	
-	test_acdc = Acdc(config60)
+	test_acdc = Acdc(config52)
 
 	test_acdc.calibrate_board()
 	# test_acdc.plot_events(file_list)
 	
 	test_acdc.process_files(file_list)
-	test_acdc.save_npz('acdc60_nowrap2_timecal_notnorm_selftrig3000_1')
+	test_acdc.save_npz('acdc52_wrtimes_only_094355')
+	# test_acdc.plot_centers()
 
 	# test_acdc.load_npz('acdc62_stat2_full')
 

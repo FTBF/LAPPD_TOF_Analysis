@@ -1,7 +1,10 @@
 testData/*
+calib/*
 configs/0/*
 *.pyc
 Analysis.ipynb
 *.jpg
 *.png
-configs/133741/*
+cameron_plots/
+old_code.py
+npz/*

@@ -1,7 +1,12 @@
 calibration_file: calib/acdc70.root #A calibration file to save measurement results. You may override existing calibration.
 #V: vervose
 tasks: vV
+old_format: F
+verbose: T
+debug: F
+save: T
 #r: raw data, p: linearized plot, e: animated ellipse plot gid, v: voltage curve, t:timebase, 
+#V: plot voltage curve from root file
 #T:timebase first order, j:phase jittering calculation, l: first order timebase correction
 #w: weighted timebase correction, h: draw ellipse plots, R: wraparound only
 plot:

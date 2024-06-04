@@ -1238,19 +1238,19 @@ class Util:
 			# reorder = np.argsort(voltage_counts[:,:,:,0], axis=2)
 			# voltage_counts = np.take_along_axis(voltage_counts, reorder[:,:,:,np.newaxis], axis=2)
 			# warnings.simplefilter('error')
-			if(debug):
-				for ch in range(0, 30):
-					for cap in range(0, 256):
+			
+			for ch in range(0, 30):
+				for cap in range(0, 256):
 
-						vert_mask = np.append((np.diff(voltage_counts[ch,cap,:,1]) > 4), False)
-						vert_mask = vert_mask & np.roll(vert_mask, 1)
-						adc_data = voltage_counts[ch, cap, vert_mask, 1]
-						volt_data = voltage_counts[ch, cap, vert_mask, 0]
+					vert_mask = np.append((np.diff(voltage_counts[ch,cap,:,1]) > 4), False)
+					vert_mask = vert_mask & np.roll(vert_mask, 1)
+					adc_data = voltage_counts[ch, cap, vert_mask, 1]
+					volt_data = voltage_counts[ch, cap, vert_mask, 0]
 
-						tck = scipy.interpolate.splrep(adc_data, volt_data, s=0.00005, k=3)
-						single_bspline = scipy.interpolate.BSpline(*tck, extrapolate=True)
-						vccs[ch][cap] = single_bspline
-
+					tck = scipy.interpolate.splrep(adc_data, volt_data, s=0.00005, k=3)
+					single_bspline = scipy.interpolate.BSpline(*tck, extrapolate=True)
+					vccs[ch][cap] = single_bspline
+					if(debug):
 						fig, ax = plt.subplots()
 						ax.set_title(f'Ch: {ch}, cap: {cap}')
 						ax.scatter(voltage_counts[ch,cap,:,1], voltage_counts[ch,cap,:,0], marker='.', color='black')

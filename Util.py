@@ -28,6 +28,7 @@ VERBOSE = False
 SAVE = True
 WRAPAROUND_ONLY = False
 ERRORBAR = False
+VCC_NONLINEARITY = False
 class Util:
 	def __init__(self, board_config=None):
 		self.measurement_config = Util.load_config(board_config)
@@ -438,6 +439,8 @@ class Util:
 				file_path = filedict[str(index_maxes[channel <= index_maxes][0])]
 			times320, _, sineData = Util.getDataRaw([file_path])
 			trigger_pos = (((times320+2+2)%8)*32-16)%256
+			trigger_pos += self.measurement_config["timebase"]["trigger_offset"]
+			trigger_pos %= 256
 			sineData = self.linearize_voltage(sineData) - 1.2/4096*self.measurement_config["timebase"]["pedestal"]
 			true_freq = self.measurement_config["timebase"]["true_freq"]#Frequency of the signal source used for timebase measurement.
 			nevents = self.measurement_config["timebase"]["nevents"]
@@ -516,8 +519,8 @@ class Util:
 						#print("b = %f"%b)
 
 						dtij = math.atan(b/a)/(math.pi*true_freq) # This is roughly sqrt(fit[0]/fit[2])/(math.pi*true_freq)
-						dfit0 = res * np.sqrt(np.inv(np.transpose(A)@A)[0,0])
-						dfit2 = res * np.sqrt(np.inv(np.transpose(A)@A)[2,2])
+						dfit0 = res * np.sqrt(np.linalg.inv(np.transpose(A)@A)[0,0])
+						dfit2 = res * np.sqrt(np.linalg.inv(np.transpose(A)@A)[2,2])
 						rough_uncertainty = 0.5*np.sqrt((dfit0/fit[0])**2 + (dfit2/fit[2])**2)
 						#print("dtij = %f ps"%(dtij*1e12))
 						chTimeOffsetMatrix.append(dtij)
@@ -1246,10 +1249,12 @@ class Util:
 					vert_mask = vert_mask & np.roll(vert_mask, 1)
 					adc_data = voltage_counts[ch, cap, vert_mask, 1]
 					volt_data = voltage_counts[ch, cap, vert_mask, 0]
-
-					tck = scipy.interpolate.splrep(adc_data, volt_data, s=0.00005, k=3)
-					single_bspline = scipy.interpolate.BSpline(*tck, extrapolate=True)
-					vccs[ch][cap] = single_bspline
+					if(VCC_NONLINEARITY):
+						tck = scipy.interpolate.splrep(adc_data, volt_data, s=0.00005, k=3)
+						single_bspline = scipy.interpolate.BSpline(*tck, extrapolate=True)
+						vccs[ch][cap] = single_bspline
+					else:
+						vccs[ch][cap] = scipy.interpolate.interp1d(adc_data, volt_data, fill_value='extrapolate')
 					if(debug):
 						fig, ax = plt.subplots()
 						ax.set_title(f'Ch: {ch}, cap: {cap}')
@@ -1259,6 +1264,7 @@ class Util:
 						plt.show()
 	
 		linDat = np.zeros_like(sineData, float)
+		
 		for ch in range(0,30):
 			for cap in range(0,256):
 				linDat[:,ch,cap] = vccs[ch][cap](sineData[:,ch,cap])
@@ -1279,6 +1285,8 @@ if __name__ == "__main__":
 		DEBUG = True
 	if ut.measurement_config["verbose"] == 'T':
 		VERBOSE = True
+	if ut.measurement_config["vcc_nonlinear"] == 'T':
+		VCC_NONLINEARITY = True
 	if 'R' in ut.measurement_config["tasks"]:
 		WRAPAROUND_ONLY = True
 	if 'E' in ut.measurement_config["tasks"]:

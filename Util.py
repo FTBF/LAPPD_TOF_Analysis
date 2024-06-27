@@ -1287,16 +1287,15 @@ class Util:
 			ydata = np.linspace(0, 29, 30)
 			zdata = self.linearize_voltage(rawData[event,channels,:]) - 1.2/4096*self.measurement_config["plot"]["pedestal"]
 			plt.clf()
-			fig, (ax1) = plt.subplots(1, 1)
+			fig, ax1 = plt.subplots(1, 1)
 			norm = matplotlib.colors.CenteredNorm()
 			#norm = matplotlib.colors.SymLogNorm(10)
 			cm = ax1.pcolormesh(xdata, ydata, zdata, norm=norm, cmap='bwr')
 			fig.colorbar(cm, ax = ax1)
 			ax1.set_xlabel("Time sample (ns)")
 			ax1.set_ylabel("Channel")
+			fig.tight_layout()
 			plt.show()
-
-fig.tight_layout()
 
 if __name__ == "__main__":
 	try:

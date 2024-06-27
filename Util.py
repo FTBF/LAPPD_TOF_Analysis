@@ -11,6 +11,7 @@ import scipy.interpolate
 import scipy.integrate
 import matplotlib.pyplot as plt
 from matplotlib.animation import FuncAnimation
+import matplotlib.colors as mcl
 import multiprocessing as mp
 import os.path
 import sys
@@ -1288,8 +1289,7 @@ class Util:
 			zdata = sineData[event,channels,:]
 			plt.clf()
 			fig, ax1 = plt.subplots(1, 1)
-			norm = matplotlib.colors.CenteredNorm()
-			#norm = matplotlib.colors.SymLogNorm(10)
+			norm = mcl.CenteredNorm()
 			cm = ax1.pcolormesh(xdata, ydata, zdata, norm=norm, cmap='bwr')
 			fig.colorbar(cm, ax = ax1)
 			ax1.set_xlabel("Time sample (ns)")

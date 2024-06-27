@@ -1286,7 +1286,7 @@ class Util:
 			xdata = np.linspace(0, 255,256)*25/256
 			ydata = np.linspace(0, 29, 30)
 			zdata = self.linearize_voltage(rawData[event,channels,:]) - 1.2/4096*self.measurement_config["plot"]["pedestal"]
-			
+			plt.clf()
 			fig, (ax1) = plt.subplots(1, 1)
 			norm = matplotlib.colors.CenteredNorm()
 			#norm = matplotlib.colors.SymLogNorm(10)
@@ -1294,6 +1294,7 @@ class Util:
 			fig.colorbar(cm, ax = ax1)
 			ax1.set_xlabel("Time sample (ns)")
 			ax1.set_ylabel("Channel")
+			plt.show()
 
 fig.tight_layout()
 

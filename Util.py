@@ -1295,7 +1295,7 @@ class Util:
 			ax1.set_xlabel("Time sample (ns)")
 			ax1.set_ylabel("Channel")
 			fig.tight_layout()
-			plt.show()
+
 
 if __name__ == "__main__":
 	try:

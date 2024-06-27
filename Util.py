@@ -1323,7 +1323,7 @@ if __name__ == "__main__":
 		ut.plot(mode='p')
 	if 'P' in ut.measurement_config["tasks"]:
 		ut.plot_with_timebase()
-	if '2' in ut.measurement_config["tasks"]:
+	if 'H' in ut.measurement_config["tasks"]:
 		ut.histogram_2d()
 	if 'e' in ut.measurement_config["tasks"]:
 		ut.plot_ellipse()

@@ -1267,11 +1267,35 @@ class Util:
 		
 		for ch in range(0,30):
 			for cap in range(0,256):
-				linDat[:,ch,cap] = vccs[ch][cap](sineData[:,ch,cap])
+				linDat[:,ch,cap] = np.clip(vccs[ch][cap](sineData[:,ch,cap]), -2, 2)
 
 		return linDat
 		
+	def histogram_2d(self):
+		# Metadata
+		events = self.measurement_config["plot"]["event"]
+		nevents = self.measurement_config["plot"]["nevents"]
+		trigger_thresh = self.measurement_config["plot"]["trigger_threshold"]
+
+		# Reads in file and calibrates it based off mode (tasks in .yml config file)
+		times320, times, rawData = Util.getDataRaw([self.measurement_config["plot"]["input"]], batchsize=nevents)
+		
+		channels = np.array([5,4,3,2,1,0,11,10,9,8,7,6,17,16,15,14,13,12,23,22,21,20,19,18,29,28,27,26,25,24])
+		#channels = np.array([0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29])
+		for event in events:
+			xdata = np.linspace(0, 255,256)*25/256
+			ydata = np.linspace(0, 29, 30)
+			zdata = self.linearize_voltage(rawData[event,channels,:]) - 1.2/4096*self.measurement_config["plot"]["pedestal"]
 			
+			fig, (ax1) = plt.subplots(1, 1)
+			norm = matplotlib.colors.CenteredNorm()
+			#norm = matplotlib.colors.SymLogNorm(10)
+			cm = ax1.pcolormesh(xdata, ydata, zdata, norm=norm, cmap='bwr')
+			fig.colorbar(cm, ax = ax1)
+			ax1.set_xlabel("Time sample (ns)")
+			ax1.set_ylabel("Channel")
+
+fig.tight_layout()
 
 if __name__ == "__main__":
 	try:
@@ -1299,6 +1323,8 @@ if __name__ == "__main__":
 		ut.plot(mode='p')
 	if 'P' in ut.measurement_config["tasks"]:
 		ut.plot_with_timebase()
+	if '2' in ut.measurement_config["tasks"]:
+		ut.histogram_2d()
 	if 'e' in ut.measurement_config["tasks"]:
 		ut.plot_ellipse()
 	if 'U' in ut.measurement_config["tasks"]:

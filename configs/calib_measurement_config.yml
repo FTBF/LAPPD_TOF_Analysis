@@ -5,6 +5,7 @@ old_format: F
 verbose: T
 debug: F
 save: T
+vcc_nonlinear: F #If true, the voltage curve is calculated using the non-linearized data. Do not use this option, since VCC smoothness is not guaranteed.
 #r: raw data, p: linearized plot, e: animated ellipse plot gid, v: voltage curve, t:timebase, 
 #V: plot voltage curve from root file
 #T:timebase first order, j:phase jittering calculation, l: first order timebase correction

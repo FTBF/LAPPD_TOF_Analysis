@@ -24,6 +24,12 @@ VAR_SINE_FREQ = False		# Toggles whether sync sine fit frequency is fixed or flo
 QUIET = False
 DEBUG = False
 
+#1. Create an instance of Acdc
+#2. calibrate_board()
+#3. process_files(file_list), where file_list is raw data files
+#4.	test_acdc.save_npz('acdc52_wrtimes_only_094355')
+
+	# test_acdc.load_npz('acdc62_stat2_full')
 # Globals for debugging purposes only
 all_xh = []
 all_yh = []
@@ -508,7 +514,7 @@ class Acdc:
 		if NO_POSITIONS:
 			ydata_v, opt_chs, misfire_masks = np.full((times_320.shape[0], 256), 0), np.full(times_320.shape[0], 0), np.full((times_320.shape[0], 256), True)
 		else:
-			ydata_v, opt_chs, misfire_masks = self.v_data_opt_ch(data)
+			ydata_v, opt_chs, misfire_masks = self.v_data_opt_ch(data) # Here we select one channel to be the optimal channel of this event to be analyzed
 		xdata_v = np.tile(np.copy(self.strip_pos), ydata_v.shape[0]).reshape(ydata_v.shape[0], 30)
 		# xdata_v = np.tile(np.delete(np.copy(self.strip_pos), self.sync_ch), ydata_v.shape[0]).reshape(ydata_v.shape[0], 29)
 
@@ -1024,6 +1030,8 @@ class Acdc:
 			self.station_id = data['station_id']
 			self.zpos = data['zpos']
 			self.corner_offset = data['corner_offset']
+
+			#This is populated during preprocessing
 			self.waveforms_optch = data['waveforms_optch']
 			self.waveforms_sin = data['waveforms_sin']
 			self.hpos = data['hpos']

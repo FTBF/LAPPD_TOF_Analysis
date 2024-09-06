@@ -13,6 +13,10 @@ import numba
 import warnings
 import yaml
 
+#utility functions are called throughout this class as
+#util.convert_to_list() and util.find_extrema_spline()
+import util as util
+
 
 MAX_PROCESSES = 1
 CALIB_ADC = True			# Toggles whether VCCs are used (true) or simple pedestal subtraction (false)
@@ -24,12 +28,6 @@ VAR_SINE_FREQ = False		# Toggles whether sync sine fit frequency is fixed or flo
 QUIET = False
 DEBUG = False
 
-#1. Create an instance of Acdc
-#2. calibrate_board()
-#3. process_files(file_list), where file_list is raw data files
-#4.	test_acdc.save_npz('acdc52_wrtimes_only_094355')
-
-	# test_acdc.load_npz('acdc62_stat2_full')
 # Globals for debugging purposes only
 all_xh = []
 all_yh = []

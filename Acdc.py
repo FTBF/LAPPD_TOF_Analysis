@@ -28,6 +28,12 @@ VAR_SINE_FREQ = False		# Toggles whether sync sine fit frequency is fixed or flo
 QUIET = False
 DEBUG = False
 
+#1. Create an instance of Acdc
+#2. calibrate_board()
+#3. process_files(file_list), where file_list is raw data files
+#4.	test_acdc.save_npz('acdc52_wrtimes_only_094355')
+
+	# test_acdc.load_npz('acdc62_stat2_full')
 # Globals for debugging purposes only
 all_xh = []
 all_yh = []
@@ -510,7 +516,7 @@ class Acdc:
 		if NO_POSITIONS:
 			ydata_v, opt_chs, misfire_masks = np.full((times_320.shape[0], 256), 0), np.full(times_320.shape[0], 0), np.full((times_320.shape[0], 256), True)
 		else:
-			ydata_v, opt_chs, misfire_masks = self.v_data_opt_ch(data)
+			ydata_v, opt_chs, misfire_masks = self.v_data_opt_ch(data) # Here we select one channel to be the optimal channel of this event to be analyzed
 		xdata_v = np.tile(np.copy(self.strip_pos), ydata_v.shape[0]).reshape(ydata_v.shape[0], 30)
 		# xdata_v = np.tile(np.delete(np.copy(self.strip_pos), self.sync_ch), ydata_v.shape[0]).reshape(ydata_v.shape[0], 29)
 
@@ -1016,6 +1022,8 @@ class Acdc:
 			self.station_id = data['station_id']
 			self.zpos = data['zpos']
 			self.corner_offset = data['corner_offset']
+
+			#This is populated during preprocessing
 			self.waveforms_optch = data['waveforms_optch']
 			self.waveforms_sin = data['waveforms_sin']
 			self.hpos = data['hpos']
@@ -1163,148 +1171,4 @@ class Acdc:
 		#TODO: add another layer of abstraction: station level, which does not process raw waveform. -JIN-
 		#do math to look at coincidence of clocks. 
 		return 0 #or 1, or a list of those that are in coincidence vs those that are not.
-
-
-if __name__=='__main__':
-
-	# initialization dictionary
-	config52 = {
-		'acdc_id': 52,
-		'lappd_id': 128,
-		'acc_id': 2,
-		'station_id': 2,
-		'sync_ch': 5,
-		'station_dist': None,
-		'corner_offset': [0, 0],
-		'strip_pos': None,
-		'len_cor': None,
-		'times': None,			 # xxx need a better name for this
-		'wraparound': None,
-		'vel': 144,			 # mm/ns, average (~500 MHz - 1GHz) propagation velocity of the strip 
-		'dt': 1.0/(40e6*256)*1e9,	 # nanoseconds, nominal sampling time interval, 1/(clock to PSEC4 x number of samples)
-		# 'pedestal_data_path': r'/home/cameronpoe/Desktop/lappd_tof_container/testData/old_data/Raw_testData_20230615_164912_b0.txt',
-		'pedestal_file_name': r'/home/cameronpoe/Desktop/lappd_tof_container/testData/ped_Raw_testData_ACC1_20230714_093238_b0.txt',
-		'pedestal_counts': None,
-		'pedestal_voltage': None,
-		'voltage_count_curves': None,
-		'calib_data_file_path': r'testData/acdc52.root',
-	}
-
-	config62 = {
-		'acdc_id': 62,
-		'lappd_id': 157,
-		'acc_id': 1,
-		'station_id': 1,
-		'sync_ch': 5,
-		'strip_pos': None,
-		'len_cor': None,
-		'times': None,			 # xxx need a better name for this
-		'wraparound': None,
-		'vel': 144,			 # mm/ns, average (~500 MHz - 1GHz) propagation velocity of the strip 
-		'dt': 1.0/(40e6*256)*1e9,	 # nanoseconds, nominal sampling time interval, 1/(clock to PSEC4 x number of samples)
-		# 'pedestal_data_path': r'/home/cameronpoe/Desktop/lappd_tof_container/testData/old_data/Raw_testData_20230615_164912_b0.txt',
-		'pedestal_file_name': r'/home/cameronpoe/Desktop/lappd_tof_container/testData/ped_Raw_testData_ACC1_20230714_093238_b0.txt',
-		'pedestal_counts': None,
-		'pedestal_voltage': None,
-		'voltage_count_curves': None,
-		'calib_data_file_path': r'testData/acdc62.root',
-	}
-
-	config60 = {
-		'acdc_id': 60,
-		'lappd_id': 0,
-		'acc_id': 0,
-		'station_id': 0,
-		'sync_ch': 5,
-		'strip_pos': None,
-		'len_cor': None,
-		'times': None,			 # xxx need a better name for this
-		'wraparound': None,
-		'vel': 144,			 # mm/ns, average (~500 MHz - 1GHz) propagation velocity of the strip 
-		'dt': 1.0/(40e6*256)*1e9,	 # nanoseconds, nominal sampling time interval, 1/(clock to PSEC4 x number of samples)
-		# 'pedestal_data_path': r'/home/cameronpoe/Desktop/lappd_tof_container/testData/old_data/Raw_testData_20230615_164912_b0.txt',
-		'pedestal_file_name': r'testData/acdc60/Raw_Pedestal_20240220_132806_b0.txt',
-		'pedestal_counts': None,
-		'pedestal_voltage': None,
-		'voltage_count_curves': None,
-		'calib_file_name': r'testData/acdc60.root',
-		'zpos': 0,
-		'corner_offset': [0,0]
-	}
-
-	config62 = 'acdc62.yml'
-	config52 = 'acdc52.yml'
-	config60 = 'acdc60.yml'
-	config50 = 'acdc50.yml'
-	
-	file_list = [
-		# 50 V photocathode
-		'testData/acdc52/Raw_testData_ACC2_20230714_094355_b0.txt',
-		# 'testData/Raw_testData_ACC2_20230714_094508_b0.txt',
-		# 'testData/Raw_testData_ACC2_20230714_094640_b0.txt',
-		# 'testData/Raw_testData_ACC2_20230714_094737_b0.txt',
-    	# 'testData/Raw_testData_ACC2_20230714_094940_b0.txt',
-    	# 'testData/Raw_testData_ACC2_20230714_095032_b0.txt',
-		# 'testData/Raw_testData_ACC2_20230714_095229_b0.txt',
-    	# 'testData/Raw_testData_ACC2_20230714_095300_b0.txt',
-    	# 'testData/Raw_testData_ACC2_20230714_095543_b0.txt',
-		# 10 V photocathode
-		# 'testData/Raw_testData_ACC2_20230714_091716_b0.txt',
-		# 'testData/Raw_testData_ACC2_20230714_091928_b0.txt',
-		# 'testData/Raw_testData_ACC2_20230714_091957_b0.txt',
-		# 'testData/Raw_testData_ACC2_20230714_092102_b0.txt',
-		# 'testData/Raw_testData_ACC2_20230714_092253_b0.txt',
-		# 'testData/Raw_testData_ACC2_20230714_092536_b0.txt',
-		# 'testData/Raw_testData_ACC2_20230714_092620_b0.txt',
-		# 'testData/Raw_testData_ACC2_20230714_092824_b0.txt',
-		# 'testData/Raw_testData_ACC2_20230714_092904_b0.txt',
-		# ACDC60 stuff:
-		# 'testData/acdc60/Raw_testData_ACC1_20240426_103832_b0.txt',
-		]
-	
-	test_acdc = Acdc(config52)
-
-	test_acdc.calibrate_board()
-	# test_acdc.plot_events(file_list)
-	
-	test_acdc.process_files(file_list)
-	test_acdc.save_npz('acdc52_wrtimes_only_094355')
-	# test_acdc.plot_centers()
-
-	# test_acdc.load_npz('acdc62_stat2_full')
-
-	exit()
-
-	fig, ax = plt.subplots()
-	bins = np.linspace(3.5,6.5,400)
-	xvals = bins[0:-1]
-	hist_vals, _ = np.histogram(all_x, bins=np.linspace(3.5, 6.5, 400))
-	p0 = [hist_vals.max(), 20, 5.5, 0]
-	popt, pcov = curve_fit(gauss_const_back, xvals, hist_vals, p0=p0)
-	print(popt)
-	x = np.linspace(3.5,6.5,500)
-	ax.scatter(xvals, hist_vals, marker='.', color='black')
-	ax.plot(x, gauss_const_back(x, *popt), color='red')
-	plt.show()
-
-	exit()
-
-	# test_acdc.import_raw_data(data_path)
-
-	# file_name_i_want_to_save_as = r'current_working_data'
-	# directory_to_save_to = r'/home/cameronpoe/Desktop/lappd_tof_container/testData/processed_data'
-	# test_acdc.save_data_npz(file_name_i_want_to_save_as, directory_path=directory_to_save_to)
-	
-	# test_acdc.hist_single_cap_counts_vs_ped(10, 22)
-
-	# event_subset = np.linspace(0, 1250, 1251, dtype=int)
-	# bad_events = [554, 592, 593, 594, 632, 636, 709, 783, 854, 878, 887, 923, 962, 1033, 1047, 1099, 1139, 1180, 1240]
-	# bad_events = [616, 714, 1074, 1162, 1174]
-	# bad_events = [783]
-	
-	# bad_events = [53]
-
-	# bad spline cfd events 620, 745
-	# centers = test_acdc.find_event_centers(METHOD='least-squares', DEBUG_EVENTS=True, SAVE=False, events=[623])
-	
 

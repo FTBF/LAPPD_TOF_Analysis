@@ -1,0 +1,9 @@
+acdc_id: 44 #board number of the ACDC
+lappd_id: 157 #LAPPD number 
+acc_id: 0 #ACC number
+station_id: 0 #Presently used to identify the "b0" vs "b1" in filename tags that identify stations
+sync_ch: 5 #Channel where there is a sine wave input for synchronization
+zpos: 0 #The z position of the LAPPD's cathode surface in mm (?). seems unused at the moment
+corner_offset: [0, 0] #Distance that the corner of the LAPPD is from the beam axis. Shouldn't this be a reconstructed variable? 
+pedestal_file_name: '' #Tag identifier of the pedestal files, which should be in the same folder as the data files
+calib_file_name: '../../data/calibrations/acdc44.root' #path to calibration file name? 

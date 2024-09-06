@@ -8,3 +8,4 @@ Analysis.ipynb
 cameron_plots/
 old_code.py
 npz/*
+notebooks/__pycache__/*

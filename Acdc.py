@@ -429,7 +429,7 @@ class Acdc:
 
 				# Currently not good method of getting goodness-of-fit
 				sinsigma = np.sqrt(np.diag(pcov))
-				# r = ysin - sin_const_back(xsin, *popt)
+				# r = ysin - util.sin_const_back(xsin, *popt)
 				chi2 = sinsigma
 				# chi2 = r.T @ np.linalg.inv(sinsigma) @ r
 

@@ -12,22 +12,10 @@ import warnings
 import yaml
 import util as util
 
-MAX_PROCESSES = 1
-CALIB_ADC = True			# Toggles whether VCCs are used (true) or simple pedestal subtraction (false)
-CALIB_TIME_BASE = True		# Toggles whether ellipse fit time base is used (true) or not (false)
-NO_POSITIONS = True		# Toggles whether x- and y-positions are reconstructed
-NO_SINES = True				# Toggles whether sync channel sines are fitted
-EXCLUDE_WRAP = True			# Toggles whether wraparound is excluded from sync sine fit
-VAR_SINE_FREQ = False		# Toggles whether sync sine fit frequency is fixed or floating
-QUIET = False
-DEBUG = False
 
 # Globals for debugging purposes only
 all_xh = []
 all_yh = []
-
-if DEBUG:
-	MAX_PROCESSES = 1
 
 
 #This class represents the ACDC boards, and thus
@@ -64,21 +52,12 @@ class Acdc:
 
 		# Constants
 		self.chan_rearrange = np.array([5,4,3,2,1,0,11,10,9,8,7,6,17,16,15,14,13,12,23,22,21,20,19,18,29,28,27,26,25,24])
-		self.vel = 144.					# mm/ns
 		self.dt = 1.0/(40e6*256)*1e9	# PLL is 40 MHz, DLL is 256 samples, nominal sample spacing = 1/(256*40 MHz)
 				
-		# Metadata
-		self.acdc_id = config_data['acdc_id']			# ACDC number (see inventory), e.g. '46'
-		self.lappd_id = config_data['lappd_id']			# Incom manufacturing number, e.g. '125'
-		self.acc_id = config_data['acc_id']				# ACC nmber (see inventory), e.g. '1'
-		self.station_id = config_data['station_id']		# station position, e.g. '1'
-		self.sync_ch = self.chan_rearrange[config_data['sync_ch']]
+		self.sync_ch = self.chan_rearrange[self.c['sync_ch']]
 
-		# Positioning data
-		self.zpos = config_data['zpos']						# Distance to next upstream station
-		self.corner_offset = config_data['corner_offset']	# Distance corner of active area is from beam axis
-
-		# Pedestal related
+		# Pedestal related - this may be removed soon and instead reference the ped setting
+		#as well as the linearity calibration data. 
 		self.ped_data_path = config_data['pedestal_file_name']
 		self.pedestal_data = None
 		self.pedestal_counts = None
@@ -86,21 +65,28 @@ class Acdc:
 		# Calibration related
 		self.calib_data_file_path = config_data['calib_file_name']
 		self.vccs = None
-		self.reflect_time_offset = np.full(30, 3.3)
-		self.wr_calib_offset = np.full(30, 3.26)
-		self.strip_pos = 6.6*np.linspace(0,29,30)	
 
-		# Derived data
-		self.waveforms_optch = None
-		self.waveforms_sin = None
-		self.hpos = None
-		self.vpos = None	
 
-		# self.pedestal_counts = init_data_dict['pedestal_counts']	# ADC count; a list of 256 integers, which corresponds to each capicitors of VCDL.
-		# self.pedestal_voltage = init_data_dict['pedestal_voltage']
+		#the output data structure contains many reduced
+		#quantities that form an event indexed dataframe. 
+		#load the yaml file containing these reduced quantities
+		#notes on reduced data output structure
+
+		try:
+			with open(self.c["rq_file"], 'r') as yf:
+				self.rq_config = yaml.safe_load(yf)
+		except FileNotFoundError:
+			print(f'{self.c["rq_file"]} doesn\'t exist')
+			self.rq_config = None
 		
-		if not QUIET:
-			print(f'ACDC instantiated\n  ACDC:    {self.acdc_id}\n  LAPPD:   {self.lappd_id}\n  ACC:     {self.acc_id}\n  Station: {self.station_id}\n')
+		self.output = {}
+		for key, init_value in self.rq_config:
+			self.output[key] = init_value
+
+		if not self.c["QUIET"]:
+			print(f'ACDC instantiated\n  ACDC:    {self.c["acdc_id"]}\n  LAPPD:   {self.c["lappd_id"]}\n  ACC:     {self.c["acc_id"]}\n  Station: {self.c["station_id"]}\n')
+
+
 
 	def import_raw_data(self, raw_data_path, is_pedestal_data=False):
 		"""Imports binary LAPPD data into ACDC object.
@@ -177,10 +163,11 @@ class Acdc:
 		# Still returns relevant data
 		return times_320, times, data
 
+	#calibrate time base and linearity for the board using the .root calibration files. 
 	def calibrate_board(self):
 
 		vccs = [[None]*256 for i in range(30)]
-		if CALIB_ADC:
+		if self.c["CALIB_ADC"]:
 			# Imports voltage calib data and normalizes
 			with uproot.open(self.calib_data_file_path) as calib_file:
 
@@ -255,7 +242,7 @@ class Acdc:
 
 		# Calibrates the ADC data
 		data = np.empty_like(data_raw, dtype=np.float64)
-		if CALIB_ADC:
+		if self.c["CALIB_ADC"]:
 			for ch in range(0,30):
 				for cap in range(0,256):
 					data[:,ch,cap] = self.vccs[ch][cap](data_raw[:,ch,cap])
@@ -263,11 +250,13 @@ class Acdc:
 			data = data_raw - self.pedestal_counts
 
 		# Selects optimal y data (voltage) and channels
-		if NO_POSITIONS:
+		if self.c["NO_POSITIONS"]:
 			ydata_v, opt_chs, misfire_masks = np.full((times_320.shape[0], 256), 0), np.full(times_320.shape[0], 0), np.full((times_320.shape[0], 256), True)
 		else:
 			ydata_v, opt_chs, misfire_masks = self.v_data_opt_ch(data) # Here we select one channel to be the optimal channel of this event to be analyzed
-		xdata_v = np.tile(np.copy(self.strip_pos), ydata_v.shape[0]).reshape(ydata_v.shape[0], 30)
+		
+		strip_pos = self.c["strip_pitch"]*np.linspace(0,29,30)
+		xdata_v = np.tile(np.copy(strip_pos), ydata_v.shape[0]).reshape(ydata_v.shape[0], 30)
 		# xdata_v = np.tile(np.delete(np.copy(self.strip_pos), self.sync_ch), ydata_v.shape[0]).reshape(ydata_v.shape[0], 29)
 
 		num_events = opt_chs.shape[0]
@@ -314,6 +303,8 @@ class Acdc:
 		# 	ax.axvline(wrap)
 		# 	plt.show()
 
+		self.output["xdata_v"] = xdata_v
+
 		return xdata_v, ydata_v, xdata_h, ydata_h, opt_chs, misfire_masks, xdata_sine, ydata_sine, trigger_low
 
 	def v_data_opt_ch(self, data):
@@ -329,7 +320,7 @@ class Acdc:
 		IMPROVED = True
 		if IMPROVED:
 			# Finds optimal channels (1D array, length=# of events, best ch per event)
-			if CALIB_ADC:
+			if self.c["CALIB_ADC"]:
 				baseline = 0.85
 				too_low_val = 0.15
 			else:
@@ -474,10 +465,10 @@ class Acdc:
 
 		delta_t_vec = np.array(delta_t_vec)
 		first_peak_vec = np.array(first_peak_vec)
-		hpos_vec = 0.5*self.vel*(delta_t_vec - np.delete(self.reflect_time_offset[opt_chs], skipped))
+		reflection_time_offset = np.full(30, self.c["strip_length_ns"])
+		hpos_vec = 0.5*self.c["vel"]*(delta_t_vec - np.delete(reflection_time_offset, skipped))
 
-		calib_constants = np.delete(self.wr_calib_offset[opt_chs], skipped)
-		eventphi_vec = (first_peak_vec - (200./self.vel - hpos_vec/self.vel)) - phi_vec	# 200 mm = length of LAPPD
+		eventphi_vec = (first_peak_vec - (200./self.c["vel"] - hpos_vec/self.c["vel"])) - phi_vec	# 200 mm = length of LAPPD
 
 		opt_chs = np.delete(opt_chs, skipped)
 		
@@ -695,6 +686,7 @@ class Acdc:
 		#	data_dict[key] = data_dict[key].item()
 
 
+
 		np.savez('npz/' + file_name, acdc_id=self.acdc_id, lappd_id=self.lappd_id, acc_id=self.acc_id, station_id=self.station_id, zpos=self.zpos, corner_offset=self.corner_offset, waveforms_optch=self.waveforms_optch, waveforms_sin=self.waveforms_sin, hpos=self.hpos, vpos=self.vpos, times_wr=self.times_wr, eventphi=self.eventphi, first_peak=self.first_peak, phi=self.phi, omega=self.omega, delta_t=self.delta_t, opt_chs=self.opt_chs, chi2=self.chi2, startcap=self.startcap)
 
 		return
@@ -845,6 +837,9 @@ class Acdc:
 			
 	#Correcting the raw waveform #1!
 	#Jin suggests the ACDC class should carry a chain of waveforms rather then every correction function directly acting on a single waveform variable; the former is much more traceable and debuggable.
+	#Strategies:
+	#Look at all samples, assuming negative polar pulses, take 75% percentile (or something) of maximum sample values
+	#Or, just look at the furthest samples from the trigger and do N nanoseconds of averaging. 
 	def baseline_subtract(self):
 		pass#NOT YET IMPLEMENTED
 

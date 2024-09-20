@@ -1,0 +1,9 @@
+acdc_id: 52
+lappd_id: 128
+acc_id: 2
+station_id: 1
+sync_ch: 5
+zpos: 0
+corner_offset: [55, -100]
+pedestal_file_name: ''
+calib_file_name: 'calib/acdc52.root'

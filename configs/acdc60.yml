@@ -1,9 +1,0 @@
-acdc_id: 60
-lappd_id: 0
-acc_id: 0
-station_id: 0
-sync_ch: 5
-zpos: 0
-corner_offset: [0, 0]
-pedestal_file_name: ''
-calib_file_name: 'calib/acdc60.root'

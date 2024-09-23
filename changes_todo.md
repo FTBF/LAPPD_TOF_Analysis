@@ -5,7 +5,7 @@
 
 # Functional changes
 - Add argument to ACDC::process_files that handles pedestal files better. We will pass a list of pedestal files in parallel with a list of data files. This function should check for the closest-in-time pedestal file and, if it hasn't been calibrated by that file already, recalibrate using that file. 
-- (Evan) Change data outputs into dictionaries so that one doesn't have to manually name every attribute. Then adjust (everything) the ACDC::save_npz functionality - see the comment at that function. For example `output_dict = {"first_peak":[], "reduced_quantity2":[]}`
+- (Ahan) Change data outputs into dictionaries so that one doesn't have to manually name every attribute. Then adjust (everything) the ACDC::save_npz functionality - see the comment at that function. For example `output_dict = {"first_peak":[], "reduced_quantity2":[]}`
 
 
 

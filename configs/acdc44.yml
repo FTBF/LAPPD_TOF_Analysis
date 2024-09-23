@@ -18,17 +18,17 @@ strip_length_ns: 3.3 #length of the strip in nanoseconds. could change this to m
 strip_pitch: 6.6 #mm
 
 #waveform analysis quantities
-rq_file: 'reduced_quantities.yml' #path to reduced quantities file
+rq_file: "../configs/reduced_quantities.yml" #path to reduced quantities file
 baseline_ns: 5 #number of nanoseconds at the end of the waveform (far from the pulse)
 
 
 #reduction/processing switch cases
-MAX_PROCESSES = 1
-CALIB_ADC = True			# Toggles whether VCCs are used (true) or simple pedestal subtraction (false)
-CALIB_TIME_BASE = True		# Toggles whether ellipse fit time base is used (true) or not (false)
-NO_POSITIONS = True		# Toggles whether x- and y-positions are reconstructed
-NO_SINES = True				# Toggles whether sync channel sines are fitted
-EXCLUDE_WRAP = True			# Toggles whether wraparound is excluded from sync sine fit
-VAR_SINE_FREQ = False		# Toggles whether sync sine fit frequency is fixed or floating
-QUIET = False
-DEBUG = False
+MAX_PROCESSES: 1
+CALIB_ADC: True # Toggles whether VCCs are used (true) or simple pedestal subtraction (false)
+CALIB_TIME_BASE: True # Toggles whether ellipse fit time base is used (true) or not (false)
+NO_POSITIONS: True # Toggles whether x- and y-positions are reconstructed
+NO_SINES: True # Toggles whether sync channel sines are fitted
+EXCLUDE_WRAP: True # Toggles whether wraparound is excluded from sync sine fit
+VAR_SINE_FREQ: False # Toggles whether sync sine fit frequency is fixed or floating
+QUIET: False # Toggles if it says what it's doing
+DEBUG: False 

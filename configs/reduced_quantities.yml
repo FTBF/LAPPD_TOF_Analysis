@@ -1,7 +1,14 @@
-xdata_v: [] #please comment each one!
-ydata_v: []
-xdata_h: []
-ydata_h: []
-opt_chs: []
-misfire_masks: []
-#incomplete
+waveforms_optch: [] #please comment each one!
+waveforms_sin: []
+hpos: [] #event indexed, horiz position
+vpos: [] #event indexed, vertical position
+times_wr: [] #event indexed, 
+eventphi: [] #event indexed, 
+first_peak: [] #event indexed, 
+phi: [] #event indexed, 
+omega: [] #event indexed, 
+delta_t: [] #event indexed, delta t between events
+opt_chs: [] #event indexed, 
+chi2: [] #event indexed, 
+startcap: [] #event indexed, 
+num_skipped: 0 #number of events skipped bc of err

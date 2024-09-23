@@ -47,7 +47,7 @@ class Acdc:
 			config_data = None
 
 		#not used yet, but I'm creating a self attribute to start the migration
-		#of the config_data into something that is more... compact
+		#of the config_data into something that is more compact
 		self.c = config_data
 
 		# Constants
@@ -80,7 +80,7 @@ class Acdc:
 			self.rq_config = None
 		
 		self.output = {}
-		for key, init_value in self.rq_config:
+		for key, init_value in self.rq_config.items():
 			self.output[key] = init_value
 
 		if not self.c["QUIET"]:
@@ -112,7 +112,7 @@ class Acdc:
 		swapformat="8"*(NUM64BITWORDS)
 
 		# Status update about which data file we're importing
-		if not QUIET:
+		if not self.c["QUIET"]:
 			if is_pedestal_data:
 				print(f'Importing pedestal data from \"{raw_data_path}\"')
 			else:
@@ -202,24 +202,24 @@ class Acdc:
 
 				vccs = [vccs[i] for i in self.chan_rearrange]				
 
-			if not QUIET:
+			if not self.c["QUIET"]:
 				print('ACDC voltage calibrated with VCCs')
 		
 		else:
 			self.import_raw_data(self.ped_data_path, is_pedestal_data=True)
 
-			if not QUIET:
+			if not self.c["QUIET"]:
 				print('ACDC ADC counts calibrated with pedestal data')
 
 		self.vccs = vccs
 
-		if CALIB_TIME_BASE:
+		if self.c["CALIB_TIME_BASE"]:
 			# Creates a time-base calibrated array of sample times
 			with uproot.open(self.calib_data_file_path) as calib_file:
 				time_base = np.reshape(calib_file['config_tree']['time_offsets'].array(library='np'), (30,256))
 				time_base = time_base[self.chan_rearrange,:]*1e9
 
-			if not QUIET:
+			if not self.c["QUIET"]:
 				print('ACDC sample times calibrated\n')
 
 		else:
@@ -231,7 +231,7 @@ class Acdc:
 			# 	print('Error: wrap-around offset less than 0')
 			# 	exit()
 
-			if not QUIET:
+			if not self.c["QUIET"]:
 				print('ACDC sample times NOT calibrated\n')
 
 		self.time_base = time_base
@@ -284,7 +284,7 @@ class Acdc:
 		# xdata_h = np.tile(np.linspace(0,255,256,dtype=int), num_events).reshape(num_events, 256)
 		# xdata_sine = np.copy(xdata_h)
 
-		if DEBUG:
+		if self.c["DEBUG"]:
 			global all_xh
 			global all_yh
 			all_xh = np.repeat(np.copy(self.time_base)[np.newaxis,:,:], num_events, axis=0)
@@ -302,8 +302,6 @@ class Acdc:
 		# 	ax.plot(xdata_sine[event, :], ydata_sine[event, :])
 		# 	ax.axvline(wrap)
 		# 	plt.show()
-
-		self.output["xdata_v"] = xdata_v
 
 		return xdata_v, ydata_v, xdata_h, ydata_h, opt_chs, misfire_masks, xdata_sine, ydata_sine, trigger_low
 
@@ -377,7 +375,7 @@ class Acdc:
 				xh, yh = xh[misfire_mask], yh[misfire_mask]	
 				
 				# Finds spatial position
-				if NO_POSITIONS:
+				if self.c["NO_POSITIONS"]:
 					delta_t, lbound, vpos = 0, 0, 0
 				else:
 					delta_t, lbound, reflect_ind = self.calc_delta_t(xh, yh, offsets)
@@ -387,7 +385,7 @@ class Acdc:
 					vpos = util.calc_vpos(xv, yv, mu0)
 				
 				# Excludes wraparound in the sine fit
-				if EXCLUDE_WRAP:
+				if self.c["EXCLUDE_WRAP"]:
 					# Keeps samples to left of wraparound
 					if wraparound_ind >= 128 and wraparound_ind < sin_rbound:		
 						xsin, ysin = xsin[:wraparound_ind-sin_lbound], ysin[:wraparound_ind-sin_lbound]
@@ -403,10 +401,10 @@ class Acdc:
 				xsin, ysin = xsin[badcap_cut], ysin[badcap_cut]
 				
 				# Fits sine with variable or constant (250 MHz) frequency
-				if NO_SINES:
+				if self.c["NO_SINES"]:
 					popt = [0., 0., 0., 0.]
 					pcov = [0.]
-				elif VAR_SINE_FREQ:
+				elif self.c["VAR_SINE_FREQ"]:
 					param_bounds = ([0.025, 1.4, -3*np.pi, 0.6], [0.4, 1.75, 3*np.pi, 0.9])
 					popt, pcov = curve_fit(util.sin_const_back, xsin, ysin, p0=p0, bounds=param_bounds)
 				else:
@@ -445,7 +443,7 @@ class Acdc:
 
 			except Exception as err:
 				skipped.append(i)	
-				if DEBUG:
+				if self.c["DEBUG"]:
 					raise err
 		
 		num_skipped = len(skipped)
@@ -465,7 +463,7 @@ class Acdc:
 
 		delta_t_vec = np.array(delta_t_vec)
 		first_peak_vec = np.array(first_peak_vec)
-		reflection_time_offset = np.full(30, self.c["strip_length_ns"])
+		reflection_time_offset = np.full(len(delta_t_vec) + num_skipped, self.c["strip_length_ns"])
 		hpos_vec = 0.5*self.c["vel"]*(delta_t_vec - np.delete(reflection_time_offset, skipped))
 
 		eventphi_vec = (first_peak_vec - (200./self.c["vel"] - hpos_vec/self.c["vel"])) - phi_vec	# 200 mm = length of LAPPD
@@ -473,8 +471,25 @@ class Acdc:
 		opt_chs = np.delete(opt_chs, skipped)
 		
 		startcap_vec = np.array(startcap_vec)
+
+		#names of keys in this dict should match reduced_quantities.yml
+		#excepting waveforms_optch and waveforms_sin
+		rq_dict = {
+			"hpos" : hpos_vec,
+			"vpos" : vpos_vec,
+			"times_wr" : times_wr_vec,
+			"eventphi" : eventphi_vec,
+			"first_peak" : first_peak_vec,
+			"phi" : phi_vec,
+			"omega" : omega_vec,
+			"delta_t" : delta_t_vec,
+			"opt_chs" : opt_chs,
+			"chi2" : chi2_vec,
+			"startcap" : startcap_vec,
+			"num_skipped" : num_skipped
+		} 
 		
-		return hpos_vec, vpos_vec, times_wr_vec, eventphi_vec, first_peak_vec, phi_vec, omega_vec, delta_t_vec, opt_chs, chi2_vec, startcap_vec, num_skipped
+		return rq_dict
 	
 	def calc_delta_t(self, xh, yh, offsets, debug=False):
 		"""
@@ -527,81 +542,61 @@ class Acdc:
 		preprocess_vec = self.preprocess_data(data_raw, times_320)
 		waveforms_optch = np.array([preprocess_vec[2], preprocess_vec[3]])
 		waveforms_sin = np.array([preprocess_vec[6], preprocess_vec[7]])
-		analyzed_vec = self.calc_positions(*preprocess_vec, times)
-		return analyzed_vec, waveforms_optch, waveforms_sin
+		rq_dict = self.calc_positions(*preprocess_vec, times) 
+		rq_dict["waveforms_optch"] = waveforms_optch
+		rq_dict["waveforms_sin"] = waveforms_sin
+		return rq_dict
 
 	#TODO: add an argument to this which is a list of pedestal files. 
 	#Then, with each data file, look at when the last pedestal calibration was done. 
 	#If there is a closer-in-time pedestal file, recalibrate with that. 
 	def process_files(self, file_list):
 
-		waveforms_optch_vec, waveforms_sin_vec = np.empty((2, 0, 256), dtype=np.float64), np.empty((2, 0, 256), dtype=np.float64)
-		hpos_vec, vpos_vec, times_wr_vec, eventphi_vec, first_peak_vec, phi_vec, omega_vec, delta_t_vec, opt_chs_vec, chi2_vec, startcap_vec, total_skipped = [], [], [], [], [], [], [], [], [], [], [], 0
+		rq_dict = self.output.copy()
+		rq_dict["waveforms_optch"], rq_dict["waveforms_sin"] = np.empty((2, 0, 256), dtype=np.float64), np.empty((2, 0, 256), dtype=np.float64)
 		t1 = process_time()
 		t3 = time()
-		if MAX_PROCESSES != 1:
-			with Pool(MAX_PROCESSES) as p:
+		if self.c["MAX_PROCESSES"] != 1:
+			with Pool(self.c["MAX_PROCESSES"]) as p:
 				file_list = util.convert_to_list(file_list)
 				rv = p.map(self.process_single_file, file_list)
 
-			for analyzed_vec, waveforms_optch, waveforms_sin in rv:
-				hpos, vpos, times_wr, eventphi, first_peak, phi, omega, delta_t, opt_chs, chi2, startcap, num_skipped = analyzed_vec
-				waveforms_optch_vec = np.append(waveforms_optch_vec, waveforms_optch, axis=1)
-				waveforms_sin_vec = np.append(waveforms_sin_vec, waveforms_sin, axis=1)
-				hpos_vec.extend(hpos)
-				vpos_vec.extend(vpos)
-				times_wr_vec.extend(times_wr)
-				eventphi_vec.extend(eventphi)
-				first_peak_vec.extend(first_peak)
-				phi_vec.extend(phi)
-				omega_vec.extend(omega)
-				delta_t_vec.extend(delta_t)
-				opt_chs_vec.extend(opt_chs)
-				chi2_vec.extend(chi2)
-				startcap_vec.extend(startcap)
-				total_skipped += num_skipped
+			for single_event_rq_dict in rv:
+				for key in single_event_rq_dict.keys():
+					if key == "waveforms_optch" or key == "waveforms_sin":
+						rq_dict[key] = np.append(rq_dict[key], single_event_rq_dict[key], axis=1)
+					elif key == "num_skipped":
+						rq_dict[key] += single_event_rq_dict[key]
+					else:
+						rq_dict[key].extend(single_event_rq_dict[key])
+				
 
 		else:
 			for file_name in file_list:
-				analyzed_vec, waveforms_optch, waveforms_sin = self.process_single_file(file_name)
-				hpos, vpos, times_wr, eventphi, first_peak, phi, omega, delta_t, opt_chs, chi2, startcap, num_skipped = analyzed_vec
-				waveforms_optch_vec = np.append(waveforms_optch_vec, waveforms_optch, axis=1)
-				waveforms_sin_vec = np.append(waveforms_sin_vec, waveforms_sin, axis=1)
-				hpos_vec.extend(hpos)
-				vpos_vec.extend(vpos)
-				times_wr_vec.extend(times_wr)
-				eventphi_vec.extend(eventphi)
-				first_peak_vec.extend(first_peak)
-				phi_vec.extend(phi)
-				omega_vec.extend(omega)
-				delta_t_vec.extend(delta_t)
-				opt_chs_vec.extend(opt_chs)
-				chi2_vec.extend(chi2)
-				startcap_vec.extend(startcap)
-				total_skipped += num_skipped
+				single_event_rq_dict = self.process_single_file(file_name)
+				for key in single_event_rq_dict.keys():
+					if key == "waveforms_optch" or key == "waveforms_sin":
+						rq_dict[key] = np.append(rq_dict[key], single_event_rq_dict[key], axis=1)
+					elif key == "num_skipped":
+						rq_dict[key] += single_event_rq_dict[key]
+					else:
+						rq_dict[key].extend(single_event_rq_dict[key])
 
 		t2 = process_time()
 		t4 = time()
+		total_skipped = rq_dict["num_skipped"]
+		num_successful_events = len(rq_dict["hpos"])
 
-		print(f'Total skipped: {round(100.*total_skipped/(total_skipped + len(hpos_vec)),2)}%')
-		print(f'Total events analyzed: {total_skipped + len(hpos_vec)}')
+		print(f'Total skipped: {round(100.*total_skipped/(total_skipped + num_successful_events),2)}%')
+		print(f'Total events analyzed: {total_skipped + num_successful_events}')
 		print(f'Process time duration: {round(t2-t1, 3)} s')
 		print(f'Wall clock duration: {round(t4-t3, 3)} s')
 
-		self.waveforms_optch = waveforms_optch
-		self.waveforms_sin = waveforms_sin
-		self.hpos = np.array(hpos_vec)
-		self.vpos = np.array(vpos_vec)
-		self.times_wr = np.array(times_wr_vec)
-		self.eventphi= np.array(eventphi_vec)
-		self.first_peak = np.array(first_peak_vec)
-		self.phi = np.array(phi_vec)
-		self.omega = np.array(omega_vec)
-		self.delta_t = np.array(delta_t_vec)
-		self.opt_chs = np.array(opt_chs_vec)
-		self.chi2 = np.array(chi2_vec)
-		self.startcap = np.array(startcap_vec)
-		self.skipped = total_skipped
+		for key, val in rq_dict.items():
+			if isinstance(val, list):
+				self.output[key] = np.array(val)
+			else:
+				self.output[key] = val
 		return
 	
 	def plot_events(self, file_list):

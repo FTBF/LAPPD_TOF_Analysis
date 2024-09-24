@@ -7,7 +7,7 @@ eventphi: [] #event indexed,
 first_peak: [] #event indexed, 
 phi: [] #event indexed, 
 omega: [] #event indexed, 
-delta_t: [] #event indexed, delta t between events
+delta_t: [] #event indexed, delta t between events?
 opt_chs: [] #event indexed, 
 chi2: [] #event indexed, 
 startcap: [] #event indexed, 

@@ -303,7 +303,18 @@ class Acdc:
 		# 	ax.axvline(wrap)
 		# 	plt.show()
 
-		return xdata_v, ydata_v, xdata_h, ydata_h, opt_chs, misfire_masks, xdata_sine, ydata_sine, trigger_low
+		preprocess_dict = {
+			"xdata_v" : xdata_v,
+			"ydata_v" : ydata_v,
+			"xdata_h" : xdata_h,
+			"ydata_h" : ydata_h,
+			"opt_chs" : opt_chs,
+			"misfire_masks" : misfire_masks,
+			"xdata_sine" : xdata_sine,
+			"ydata_sine" : ydata_sine,
+			"trigger_low" : trigger_low
+		}
+		return preprocess_dict
 
 	def v_data_opt_ch(self, data):
 		"""Small function to retrieve the channel to be used in to find the x-positions.
@@ -338,7 +349,7 @@ class Acdc:
 		
 		return ch_mins, opt_chs, misfire_masks
 
-	def calc_positions(self, xdata_v, ydata_v, xdata_h, ydata_h, opt_chs, misfire_masks, xdata_sine, ydata_sine, trigger_low, times):
+	def calc_positions(self, preprocess_dict, times):
 
 		max_offset = 10
 		offset_increment = 0.1
@@ -356,17 +367,17 @@ class Acdc:
 		# Restricting sin data bounds to exclude trigger samples
 		sin_lbound, sin_rbound = int(4*(256/25)), int(21*(256/25))
 		cut = np.linspace(sin_lbound, sin_rbound, sin_rbound-sin_lbound+1, dtype=int)
-		xdata_sine_cut, ydata_sine_cut = xdata_sine[:,cut], ydata_sine[:,cut]
+		xdata_sine_cut, ydata_sine_cut = preprocess_dict["xdata_sine"][:,cut], preprocess_dict["ydata_sine"][:,cut]
 
 		# Vectorized p0 for sin fit
-		B0 = np.average(ydata_sine, axis=1)
-		A0 = np.max(ydata_sine, axis=1) - B0
+		B0 = np.average(preprocess_dict["ydata_sine"], axis=1)
+		A0 = np.max(preprocess_dict["ydata_sine"], axis=1) - B0
 		omega0 = np.full_like(B0, 2*np.pi*0.25)
 		phi0 = np.zeros_like(B0)
 		p0_array = np.array([A0, omega0, phi0, B0]).T
 		
 		skipped = []
-		for i, (xv, yv, xh, yh, opt_ch, misfire_mask, xsin, ysin, p0, tl) in enumerate(zip(xdata_v, ydata_v, xdata_h, ydata_h, opt_chs, misfire_masks, xdata_sine_cut, ydata_sine_cut, p0_array, trigger_low)):
+		for i, (xv, yv, xh, yh, opt_ch, misfire_mask, xsin, ysin, p0, tl) in enumerate(zip(preprocess_dict["xdata_v"], preprocess_dict["ydata_v"], preprocess_dict["xdata_h"], preprocess_dict["ydata_h"], preprocess_dict["opt_chs"], preprocess_dict["misfire_masks"], xdata_sine_cut, ydata_sine_cut, p0_array, preprocess_dict["trigger_low"])):
 			try:
 
 				wraparound_ind = 255-tl
@@ -468,7 +479,7 @@ class Acdc:
 
 		eventphi_vec = (first_peak_vec - (200./self.c["vel"] - hpos_vec/self.c["vel"])) - phi_vec	# 200 mm = length of LAPPD
 
-		opt_chs = np.delete(opt_chs, skipped)
+		preprocess_dict["opt_chs"] = np.delete(preprocess_dict["opt_chs"], skipped)
 		
 		startcap_vec = np.array(startcap_vec)
 
@@ -483,7 +494,7 @@ class Acdc:
 			"phi" : phi_vec,
 			"omega" : omega_vec,
 			"delta_t" : delta_t_vec,
-			"opt_chs" : opt_chs,
+			"opt_chs" : preprocess_dict["opt_chs"],
 			"chi2" : chi2_vec,
 			"startcap" : startcap_vec,
 			"num_skipped" : num_skipped
@@ -539,10 +550,10 @@ class Acdc:
 
 	def process_single_file(self, file_name):
 		times_320, times, data_raw = self.import_raw_data(file_name)
-		preprocess_vec = self.preprocess_data(data_raw, times_320)
-		waveforms_optch = np.array([preprocess_vec[2], preprocess_vec[3]])
-		waveforms_sin = np.array([preprocess_vec[6], preprocess_vec[7]])
-		rq_dict = self.calc_positions(*preprocess_vec, times) 
+		preprocess_dict = self.preprocess_data(data_raw, times_320)
+		waveforms_optch = np.array([preprocess_dict["xdata_h"], preprocess_dict["ydata_h"]])
+		waveforms_sin = np.array([preprocess_dict["xdata_sine"], preprocess_dict["ydata_sine"]])
+		rq_dict = self.calc_positions(preprocess_dict, times) 
 		rq_dict["waveforms_optch"] = waveforms_optch
 		rq_dict["waveforms_sin"] = waveforms_sin
 		return rq_dict

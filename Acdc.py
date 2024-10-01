@@ -546,7 +546,21 @@ class Acdc:
 
 		return delta_t, lbound, reflect_ind
 
+	def plot_raw_lappd(self, event):
 
+		waveform = self.cur_waveforms[event]
+
+		xdata = np.linspace(0,255,256)
+		ydata = np.linspace(0,29,30)
+
+		fig, ax = plt.subplots()
+
+		norm = colors.CenteredNorm()
+		ax.pcolormesh(xdata, ydata, waveform, norm=norm, cmap='bwr')
+
+		plt.show()
+
+		return
 
 	def process_single_file(self, file_name):
 		times_320, times, data_raw = self.import_raw_data(file_name)

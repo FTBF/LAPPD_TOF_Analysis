@@ -4,9 +4,23 @@ from matplotlib import colors
 import uproot
 import yaml
 
-class AcdcAnalysis:
-    def __init__(self, rq_dict):
-        self.rq_dict = rq_dict.copy()
+class Analysis:
+	def __init__(self, infile_name):
+		self.infile_name = infile_name
+		self.rq_dict = {}
+		self.load_npz(self.infile_name) #populates rq_dict from the file
+		
+
+	def load_npz(self, file_name):
+
+		file_name = file_name.strip()
+		if file_name[-4:] != '.npz':
+			file_name = file_name.split('.')[-2] + '.npz'
+
+		with np.load(file_name) as data:
+			for key, val in data.items():
+				self.rq_dict[key] = val
+	
 
 #this class will load in reduced quantity data from the ACDCs (multiple) 
 #and perform math, make plots, common operations that don't live in scripts
@@ -81,7 +95,7 @@ class AcdcAnalysis:
 
 #     fig3, ax3 = plt.subplots()
 #     ax3.hist(self.hpos, np.linspace(90, 200, 111))
-    
+	
 #     plt.show()
 
 #     return
@@ -162,7 +176,7 @@ class AcdcAnalysis:
 #     ax2.set_xlabel("Time sample (ns)")
 #     ax2.set_ylabel("Y-value (calibrated)")
 #     ax2.tick_params(right=True, top=True)
-    
+	
 #     fig.tight_layout()
 #     plt.show()
 #     return

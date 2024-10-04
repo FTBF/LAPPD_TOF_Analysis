@@ -1,8 +1,7 @@
-waveforms_optch: [] #best channel for horizontal position reconstruction, taken from pedistal
-waveforms_sin: [] #event indexed, sin data
-hpos: [] #event indexed, horiz position
-vpos: [] #event indexed, vertical position
-times_wr: [] #event indexed, 1Hz and 250MHz clk counter timestamp 
+
+hpos: [] #horiz position
+vpos: [] #vertical position
+times_wr: [] #1Hz and 250MHz clk counter timestamp 
 eventphi: [] #event indexed, phase of 250MHz sine wave at reconstructed arrival time of a pulse
 first_peak: [] #event indexed, times in ns of first pulse hitting readout
 phi: [] #event indexed, phase from fitting sin(omega*t - phi)

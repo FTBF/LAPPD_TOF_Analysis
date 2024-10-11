@@ -11,7 +11,7 @@ sync_ch: 5 #Channel where there is a sine wave input for synchronization
 zpos: 0 #The z position of the LAPPD's cathode surface in mm (?). seems unused at the moment
 corner_offset: [0, 0] #Distance that the corner of the LAPPD is from the beam axis. Shouldn't this be a reconstructed variable? 
 pedestal_file_name: '' #Tag identifier of the pedestal files, which should be in the same folder as the data files
-calib_file_name: '../../data/calibrations/acdc43.root' #path to calibration file name? 
+calib_file_name: '../../data/calibrations/acdc43.root' #path to calibration file name
 data_logging_config: "logging_config.yaml" #assumed to be in the datadir, is filename of the data logging config file with channel masks, thresholds, and ped setting 
 vel: 144 #mm/ns, propagation velocity on readout board
 strip_length_ns: 3.3 #length of the strip in nanoseconds. could change this to mm and use the velocity. 
@@ -25,10 +25,10 @@ baseline_ns: 5 #number of nanoseconds at the end of the waveform (far from the p
 #reduction/processing switch cases
 MAX_PROCESSES: 1
 CALIB_ADC: True # Toggles whether VCCs are used (true) or simple pedestal subtraction (false)
-CALIB_TIME_BASE: True # Toggles whether ellipse fit time base is used (true) or not (false)
-NO_POSITIONS: True # Toggles whether x- and y-positions are reconstructed
-NO_SINES: True # Toggles whether sync channel sines are fitted
+CALIB_TIME_BASE: False # Toggles whether ellipse fit time base is used (true) or not (false)
+NO_POSITIONS: False # Toggles whether x- and y-positions are reconstructed
+NO_SINES: False # Toggles whether sync channel sines are fitted
 EXCLUDE_WRAP: True # Toggles whether wraparound is excluded from sync sine fit
-VAR_SINE_FREQ: False # Toggles whether sync sine fit frequency is fixed or floating
+VAR_SINE_FREQ: True # Toggles whether sync sine fit frequency is fixed or floating
 QUIET: False # Toggles if it says what it's doing
-DEBUG: False 
+DEBUG: True 

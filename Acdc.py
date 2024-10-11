@@ -382,7 +382,6 @@ class Acdc:
 
 				wraparound_ind = 255-tl
 				startcap = tl
-
 				xh, yh = xh[misfire_mask], yh[misfire_mask]	
 				
 				# Finds spatial position

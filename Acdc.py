@@ -390,7 +390,7 @@ class Acdc:
 				else:
 					delta_t, lbound, reflect_ind = self.calc_delta_t(xh, yh, offsets)
 					if wraparound_ind < reflect_ind:	# if wraparound is between peaks throw out event
-						raise
+						raise Exception("Wraparound Error") 
 					mu0 = xv[opt_ch]
 					vpos = util.calc_vpos(xv, yv, mu0)
 				
@@ -404,7 +404,7 @@ class Acdc:
 						xsin, ysin = xsin[wraparound_ind-sin_lbound+1:], ysin[wraparound_ind-sin_lbound+1:]
 					# Must fit a full period
 					if len(xsin) < 40:
-						raise
+						raise Exception("Length Too Short Error")
 
 				# Gets rid of any misfired caps with super low ADC value
 				badcap_cut = ysin > 0.2
@@ -452,9 +452,19 @@ class Acdc:
 				startcap_vec.append(startcap)
 
 			except Exception as err:
+				print(err)
 				skipped.append(i)	
 				if self.c["DEBUG"]:
-					raise err
+					# fig, ax = plt.subplots()
+					# ax.scatter(xh, yh, marker='.', color='black', label='Skipped Raw Data')
+					# ax.plot(xh, yh, color='black')
+					# ax.set_xlabel('Time (ns)', fontdict=dict(size=14))
+					# ax.set_ylabel('Voltage (V)', fontdict=dict(size=14))
+					# ax.xaxis.set_ticks_position('both')
+					# ax.yaxis.set_ticks_position('both')
+					# plt.minorticks_on()
+					# plt.show()
+					pass
 		
 		num_skipped = len(skipped)
 

@@ -1,0 +1,40 @@
+calibration_file: ../../data/calibrations/acdc44.root #A calibration file to save measurement results. You may override existing calibration.
+#V: vervose
+tasks: V
+old_format: F
+verbose: T
+debug: F
+save: T
+vcc_nonlinear: F #If true, the voltage curve is calculated using the non-linearized data. Do not use this option, since VCC smoothness is not guaranteed.
+#r: raw data, p: linearized plot, e: animated ellipse plot gid, v: voltage curve, t:timebase, 
+#V: plot voltage curve from root file
+#T:timebase first order, j:phase jittering calculation, l: first order timebase correction
+#w: weighted timebase correction, h: draw ellipse plots, R: wraparound only
+plot:
+  event: [500, 1500, 2500, 3500, 4500, 5500, 6500, 7500, 8500, 9500]
+  pedestal: 0x000
+  trigger_threshold: 
+  input: testData/acdc57/Raw_testData_20240516_180544_b1.txt
+  pedestalData: testData/acdc63/Raw_testData_20240516_163602_b1.txt
+  nevents: 10000  # limits the number of events read in
+  channel: 5    # only necessary for flag e
+  cap: 30       # only necessary for flag e
+voltage_curve:
+  start: 0x000
+  step: 0x010
+  end: 0xfff
+  prefix: testData/acdc70/voltagecalib3/Raw_testData_scan_pedestals_ #configs/133741/Raw_CounterTest_scan_pedestals_ ##Final file name: prefix_(pedvalue in decimal)_suffix
+  suffix: _20240517_163452_b2.txt #"_20230927_133741_b1.txt"
+
+timebase:
+  channels: [9,19]#channels to be used for timebase calculation
+  nevents: 10000
+  true_freq: 250000000 #243184495 #True frequency of the sine wave source.
+  trigger_offset: -40
+  binsize: 2500
+  subsetsize: 5000
+  pedestal: 0xa00 #Pedestal voltage during measurement.
+  pedestalData: testData/acdc60/ped_scan/Raw_testData_scan_pedestals_3200_20240329_161757_b0.txt
+  input: "testData/acdc57/Raw_testData_20240516_102801_b1.txt" #When input is not empty, prefix and suffix are disabled.
+  prefix: testData/acdc60/timebasecalib/Raw_testData_ACC1_ #Final file name: prefix_(chnum)_suffix
+  suffix: "" #_20220817_052515_b0.txt

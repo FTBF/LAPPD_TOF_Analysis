@@ -283,13 +283,14 @@ def leading_edge_bounds(xh, yh):
 		lbound = cspline.solve(lbound_y, extrapolate=False)[0]
 		rbound = cspline.solve(rbound_y, extrapolate=False)[0]
 
-		# fig, ax = plt.subplots()
-		# ax.scatter(xh, yh, marker='.', color='black')
-		# domain = np.linspace(subdomain[0], subdomain[-1], 100)
-		# ax.plot(domain, cspline(domain), color='red')
-		# ax.axvline(lbound, color='blue')
-		# ax.axvline(rbound, color='blue')
-		# plt.show()
+		fig, ax = plt.subplots()
+		ax.scatter(xh, yh, marker='.', color='black')
+		domain = np.linspace(subdomain[0], subdomain[-1], 100)
+		ax.plot(domain, cspline(domain), color='red')
+		ax.axvline(lbound, color='blue')
+		ax.axvline(rbound, color='blue')
+		ax.axvline(xh[reflect_ind], color='green')
+		plt.show()
 
 		# tck = splrep(subdomain, subrange, s=0.0005)
 		# bspline = BSpline(*tck)

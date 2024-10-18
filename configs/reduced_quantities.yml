@@ -1,0 +1,13 @@
+
+hpos: [] #horiz position
+vpos: [] #vertical position
+times_wr: [] #1Hz and 250MHz clk counter timestamp 
+eventphi: [] #event indexed, phase of 250MHz sine wave at reconstructed arrival time of a pulse
+first_peak: [] #event indexed, times in ns of first pulse hitting readout
+phi: [] #event indexed, phase from fitting sin(omega*t - phi)
+omega: [] #event indexed, frequency from fitting data to sin(omega*t - phi), floating frequency version
+delta_t: [] #event indexed, time between pulses at readout in ns, measured with lsquares
+opt_chs: [] #event indexed, same as waveforms_optch
+chi2: [] #event indexed, failed attempt to quantify sine fits
+startcap: [] #event indexed, left bound of the trigger octant
+num_skipped: 0 #number of events skipped bc of err

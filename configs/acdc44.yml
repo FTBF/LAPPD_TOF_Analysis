@@ -1,9 +1,34 @@
+
+
+#Station/"which LAPPD" related info
 acdc_id: 44 #board number of the ACDC
-lappd_id: 157 #LAPPD number 
-acc_id: 0 #ACC number
+lappd_id: 157 #LAPPD number from Incom
+acc_id: 0 #ACC number (see inventory)
 station_id: 0 #Presently used to identify the "b0" vs "b1" in filename tags that identify stations
 sync_ch: 5 #Channel where there is a sine wave input for synchronization
+
+#calibration related info
 zpos: 0 #The z position of the LAPPD's cathode surface in mm (?). seems unused at the moment
 corner_offset: [0, 0] #Distance that the corner of the LAPPD is from the beam axis. Shouldn't this be a reconstructed variable? 
 pedestal_file_name: '' #Tag identifier of the pedestal files, which should be in the same folder as the data files
-calib_file_name: '../../data/calibrations/acdc44.root' #path to calibration file name? 
+calib_file_name: '../../data/calibrations/acdc44.root' #path to calibration file name
+data_logging_config: "logging_config.yaml" #assumed to be in the datadir, is filename of the data logging config file with channel masks, thresholds, and ped setting 
+vel: 144 #mm/ns, propagation velocity on readout board
+strip_length_ns: 3.3 #length of the strip in nanoseconds. could change this to mm and use the velocity. 
+strip_pitch: 6.6 #mm
+
+#waveform analysis quantities
+rq_file: "../configs/reduced_quantities.yml" #path to reduced quantities file
+baseline_ns: 5 #number of nanoseconds at the end of the waveform (far from the pulse)
+
+
+#reduction/processing switch cases
+MAX_PROCESSES: 1
+CALIB_ADC: True # Toggles whether VCCs are used (true) or simple pedestal subtraction (false)
+CALIB_TIME_BASE: False # Toggles whether ellipse fit time base is used (true) or not (false)
+NO_POSITIONS: False # Toggles whether x- and y-positions are reconstructed
+NO_SINES: False # Toggles whether sync channel sines are fitted
+EXCLUDE_WRAP: True # Toggles whether wraparound is excluded from sync sine fit
+VAR_SINE_FREQ: True # Toggles whether sync sine fit frequency is fixed or floating
+QUIET: False # Toggles if it says what it's doing
+DEBUG: True 

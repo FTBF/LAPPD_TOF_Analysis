@@ -1,0 +1,381 @@
+import numpy as np #tested with version 1.26.4
+import uproot #tested with version 5.3.1
+import matplotlib.pyplot as plt 
+import yaml
+import sys 
+import awkward as ak #tested with version 2.6.1
+import bitstruct
+from datetime import datetime
+import scipy.interpolate as spi 
+from statsmodels.nonparametric.smoothers_lowess import lowess
+import os
+import pickle
+
+sys.path.append("../")
+import util
+
+global chan_rearrange 
+chan_rearrange = np.array([5,4,3,2,1,0,11,10,9,8,7,6,17,16,15,14,13,12,23,22,21,20,19,18,29,28,27,26,25,24])
+
+class Acdc:
+	def __init__(self, config_data):
+		# Loads configuration file. First checks if it's a yaml file; otherwise treats as Python dict
+		if isinstance(config_data, str):
+			try:
+				with open(config_data, 'r') as yf:
+					config_data = yaml.safe_load(yf)
+			except FileNotFoundError:
+				print(f'{config_data} doesn\'t exist')
+				config_data = None
+		elif not isinstance(config_data, dict):
+			print(f'`config_data` file-type not recognized: {type(config_data)}')
+			config_data = None
+
+		self.c = config_data
+		
+		
+
+		#for every event, we have a set of string indexed metadata and waveform data
+		#that is packaged as an awkward array. If the dictionary index is "waves", its a
+		#numpy array of shape (30, 256) (channel number, sample number)
+		#self.events[evno]["sys_time"] = 1234567890
+		#self.events[evno][waves][ch] = np.array([signal values])
+		self.events = None #will be populated either by loading from file or importing raw data
+		###########List of columns for quick reference##############:
+		#sys_time: clock metadata variable from each event (please specify details later)
+		#wr_time: white rabbit clock metadata from each event (please specify later)
+		#evt_count: the index of the event within the file that it is contained
+		#filename: the name of the file which this event came from
+		#file_timestamp: the timestamp of the file which this event came from, if it is in the filename
+		#channel numbers: the channel number of the waveform data, integer key
+		########################################################
+
+
+		#we have a mapping that corrects the time base of waveforms. 
+		#indexed by channel
+		self.times = [] 
+		#a mapping of shape (30, 256, 4096) that converts the 4096 possible ADC values
+		# each capacitor can have to mV. Saving it here so that if it exists, its only loaded
+		#once. 
+		self.adc_to_mv = [] 
+		
+
+		#the output data structure contains many reduced
+		#quantities that form an event indexed dataframe. 
+		#load the yaml file containing these reduced quantities
+		#notes on reduced data output structure
+		try:
+			with open(self.c["rq_file"], 'r') as yf:
+				self.rq_config = yaml.safe_load(yf)
+		except FileNotFoundError:
+			print(f'{self.c["rq_file"]} doesn\'t exist')
+			self.rq_config = None
+		
+		self.output = {}
+		for key, init_value in self.rq_config.items():
+			self.output[key] = init_value
+
+
+	#This is a temporary method that should be more generalized,
+	#as it now requires us to have a specific filename format for all runs. 
+	def get_timestamp_from_filename(self, filename):
+		filename = filename.split("/")[-1] #in case it has full path
+		uns = filename.split("_")
+		dt = datetime.strptime(uns[2]+" "+uns[3], "%Y%m%d %H%M%S")
+		return dt.timestamp()
+
+
+	#takes a list of filepaths to individual raw datafiles
+	def load_raw_data_to_events(self, infiles):
+		# CompiledFormat objects, used as quick shortcuts when unpacking data (instead of having to type "u16p48" each time)
+		format_time=bitstruct.compile("u64")
+		format_header=bitstruct.compile("u16p48")
+		format_accheader=bitstruct.compile("u56u8")
+		format=bitstruct.compile("u12"*(256*30))
+		NUM64BITWORDS = 1440 # 1440 64-bit words in a single event
+		swapformat="8"*(NUM64BITWORDS)
+
+		#re-arrange channel numbers ASAP to be in order of strip number,
+		#as opposed to how they are now labled by chip, going left to right
+		#and then cycling over 
+		infiles = sorted(infiles)
+		temp_events = []
+		#loop over each raw data file
+		for fidx, raw_data_path in enumerate(infiles):
+			print("Loading {:d} of {:d} files".format(fidx+1, len(infiles)))
+			# Open the raw data file
+			event_index = 0
+			with open(raw_data_path, "rb") as f:
+				line = f.read((1+4+NUM64BITWORDS)*8)
+				# This loop breaks when the line length is no longer
+				# what we expect it to be (i.e. (1+4+NUM64BITWORDS)*8), 
+				# which indicates end of file or file is corrupted (missing portions)
+				while(len(line) == (1+4+NUM64BITWORDS)*8):
+					acc_header = format_accheader.unpack(bitstruct.byteswap("8", line[0*8:1*8]))
+					header = format_header.unpack(bitstruct.byteswap("8", line[1*8:2*8]))
+					if((acc_header[0] != 0x123456789abcde) or (header[0] != 0xac9c)):
+						#print("CORRUPT EVENT!!! ", lnum, "%x"%acc_header[0], "%x"%header[0])
+						line = f.read((1+4+NUM64BITWORDS)*8)
+						continue
+
+					sys_time = format_time.unpack(bitstruct.byteswap("8", line[2*8:3*8]))[0]
+					wr_time = format_time.unpack(bitstruct.byteswap("8", line[3*8:4*8]))[0]
+					data = format.unpack(bitstruct.byteswap(swapformat, line[5*8:]))
+					
+					#reformat the times and data and pack into our data structure
+					temp = {}
+					temp["sys_time"] = sys_time #number of 320 MHz clock cycles
+					temp["wr_time"] = wr_time #number of ??? clock cycles.  
+					#a hint to the above may be that the old code had
+					#((wr_time>>32) & 0xffffffff) + 1e-9*(4*(wr_time & 0xffffffff))
+					temp["filename"] = raw_data_path.split("/")[-1]
+					temp["evt_count"] = event_index
+					temp["file_timestamp"] = self.get_timestamp_from_filename(temp["filename"])
+
+
+					data = np.array(data).reshape([30, 256]) #take from 1 list into 30 lists
+					#rearrange to match channel number to strip number
+					data = data[chan_rearrange,:]
+					temp["waves"] = data
+					temp_events.append(temp)
+
+					line = f.read((1+4+NUM64BITWORDS)*8)
+					event_index += 1
+		
+		#package into an awkward array
+		self.events = ak.Array(temp_events)
+
+	#in contrast to the above function, this takes
+	#a single file, with the same structure as a typical file of events,
+	#and only returns the shape (n, 30, 256) array of waveform data
+	#with no additional metadata. It is typically used for ped data processing. 
+	def load_pedestal_data(self, infile):
+		#copying what we do above, but not populating the same data structures
+		format_header=bitstruct.compile("u16p48")
+		format_accheader=bitstruct.compile("u56u8")
+		format=bitstruct.compile("u12"*(256*30))
+		NUM64BITWORDS = 1440 # 1440 64-bit words in a single event
+		swapformat="8"*(NUM64BITWORDS)
+
+		
+		#loop over each raw data file
+		ped_events = []
+		# Open the raw data file
+		with open(infile, "rb") as f:
+			line = f.read((1+4+NUM64BITWORDS)*8)
+			# This loop breaks when the line length is no longer
+			# what we expect it to be (i.e. (1+4+NUM64BITWORDS)*8), 
+			# which indicates end of file or file is corrupted (missing portions)
+			while(len(line) == (1+4+NUM64BITWORDS)*8):
+				acc_header = format_accheader.unpack(bitstruct.byteswap("8", line[0*8:1*8]))
+				header = format_header.unpack(bitstruct.byteswap("8", line[1*8:2*8]))
+				if((acc_header[0] != 0x123456789abcde) or (header[0] != 0xac9c)):
+					#print("CORRUPT EVENT!!! ", lnum, "%x"%acc_header[0], "%x"%header[0])
+					line = f.read((1+4+NUM64BITWORDS)*8)
+					continue
+
+				ped_events.extend(format.unpack(bitstruct.byteswap(swapformat, line[5*8:])))
+				line = f.read((1+4+NUM64BITWORDS)*8)
+
+		#reshape the data array for quick averaging
+		ped_events = np.array(ped_events).reshape([-1, 30, 256])
+		ped_events = ped_events[:, chan_rearrange, :]
+		return ped_events
+
+
+
+	def calibrate_waveforms(self, pedfiles):
+		#first check if any data is loaded
+		if(self.events is None):
+			print("No data loaded. Cannot calibrate waveforms.")
+			return
+		#a dictionary indexed by the filename of the data/events file
+		#for which the pedestal data corresponds to. The values of the dict
+		#are a (30, 256) array of averaged pedestal values for each channel. 
+		processed_pedestals = {} 
+
+		#but even if there are many files for the events data, there may be 
+		#only one pedestal file to load. For each unique data file, we will associate
+		#the appropriate pedestal file. 
+		pedfile_for_datafile = {} #key is datafile, value is pedfilename
+
+		#a numpy array of (30, 256, 4096) that converts the 4096 possible ADC values
+		# each capacitor can have to mV
+		adc_to_mv = [] 
+
+
+		##############timebase#################################
+		#check if the timebase data has already been loaded.
+		if(len(self.times) == 0):
+			#load the timebase data
+			print("Loading timebase data")
+			self.load_timebase_data()
+
+
+		###############pedestal part first######################
+		#get a set of what file names and timestamps are in the events data. 
+		#we don't want to be loading ALL pedestal files for nothing, and we only
+		#want to load them once. 
+		unique_datafiles = list(set(self.events["filename"]))
+		unique_timestamps = [self.get_timestamp_from_filename(f) for f in unique_datafiles]
+		pedfile_timestamps = [self.get_timestamp_from_filename(f) for f in pedfiles]
+		#for each input datafile, find the pedfile that is closest in time without going over
+		for i in range(len(unique_datafiles)):
+			t0 = unique_timestamps[i]
+			selected_pedfile = pedfiles[np.argmin([t0-t for t in pedfile_timestamps if t0-t >= 0])]
+			pedfile_for_datafile[unique_datafiles[i]] = selected_pedfile
+		
+		#load the pedestal files that are needed. 
+		for datafilename in pedfile_for_datafile:
+			if(datafilename in processed_pedestals): continue
+			print("Loading pedestal data for file {}".format(pedfile_for_datafile[datafilename]))
+			#load that pedestal data into the processed_pedestals dictionary, where the
+			#mean over axis=0 will average over all events for each capacitor
+			processed_pedestals[datafilename] = self.load_pedestal_data(pedfile_for_datafile[datafilename]).mean(axis=0)
+			
+
+		##############adc linearity part########################
+		#check if the lineary data has already been loaded. 
+		if(len(self.adc_to_mv) != 0):
+			adc_to_mv = self.adc_to_mv
+		else:
+			print("Loading linearity data")
+			adc_to_mv = self.load_linearity_data()
+		
+		#the pedestal data is in ADC counts, and can be linearity corrected 
+		#to mV by using the adc_to_mv array.
+		print("Calibrating pedestal data to convert to mV")
+		for k in processed_pedestals.keys():
+			new_pedestals = np.zeros_like(processed_pedestals[k])
+			for ch in range(len(adc_to_mv)):
+				for cap in range(len(adc_to_mv[ch])):
+					#need to interpolate the transfer function because the pedestals are
+					#the result of an average of many events, and thus are not integers. 
+					s = spi.interp1d(np.arange(4096), adc_to_mv[ch][cap], kind="linear")
+					new_pedestals[ch][cap] = s(processed_pedestals[k][ch][cap])
+			processed_pedestals[k] = new_pedestals #Now in mV
+
+		#now we can calibrate the waveforms by first converting to mV and then
+		#pedestal subtracting. 
+		print("Pedestal subtracting and converting to mV for all event waveforms")
+		#This part takes the absolute longest, however I don't know how to vectorize it.
+		#If anyone can vectorize this and re-frame the data back into the original structure,
+		#please take on that challenge. Presently it is about 1.5 events per second on my local machine. 
+		all_new_waves = []
+		for i, ev in enumerate(self.events):
+			print("On event {:d} of {:d}".format(i, len(self.events)))
+			#find the pedestal data for this event
+			ped = processed_pedestals[ev["filename"]]
+			#convert to mV and subtract pedestal for each capacitor
+			new_waves = np.zeros((30, 256))
+			for ch in range(len(ev["waves"])):
+				for cap in range(len(ev["waves"][ch])):
+					sample = ev["waves"][ch][cap]
+					new_waves[ch][cap] = adc_to_mv[ch][cap][sample] - ped[ch][cap]
+		
+			all_new_waves.append(new_waves)
+
+		#replace the old waveforms with the new ones
+		self.events = ak.with_field(self.events, all_new_waves, where="waves")
+
+
+
+	#saves a numpy array that maps the 4096 possible ADC values to mV
+	#for each capacitor and each channel. into self.adc_to_mv[ch][cap][adc] = mV
+	def load_linearity_data(self):
+		#check for the calibration root file's existence, which
+		#comes from the configuration file for the board. 
+		if("calib_file_name" in self.c):
+			calib_file = self.c["calib_file_name"]
+			#check if it exists
+			if(os.path.exists(calib_file)):
+				#load the file. NOTE: if you have an issue
+				#finding the branch adc_to_mv in the config_tree, you likely
+				#have not "preprocessed" the linearity scans, which can be found
+				#in "scripts/ReprocessLinearityCurves.ipynb"
+				with uproot.open(calib_file) as f:
+					self.adc_to_mv = np.reshape(f["config_tree"]["adc_to_mv"].array(library="np"), (30,256,4096))
+					#rearrange the channel numbers to match the order of the strips
+					self.adc_to_mv = self.adc_to_mv[chan_rearrange, :, :]
+
+				return self.adc_to_mv #in case the user wants to use it right away or check for Nones
+			else:
+				print("Can't find the filepath for the calibration file: {}	".format(calib_file))
+				adc_to_mv = np.zeros((30, 256, 4096))
+				for ch in range(len(adc_to_mv)):
+					for cap in range(len(adc_to_mv[ch])):
+						adc_to_mv[ch][cap] = np.arange(4096)*1200.0/4096.0
+				self.adc_to_mv = adc_to_mv
+				return self.adc_to_mv
+		else:	
+			print("No calibration file key in configuration file. Please create a key called 'calib_file_name' with the path to the calibration file.")
+			adc_to_mv = np.zeros((30, 256, 4096))
+			for ch in range(len(adc_to_mv)):
+				for cap in range(len(adc_to_mv[ch])):
+					adc_to_mv[ch][cap] = np.arange(4096)*1200.0/4096.0
+			self.adc_to_mv = adc_to_mv
+			return self.adc_to_mv
+
+	#loads the timebase data from the root file
+	def load_timebase_data(self):
+		if("calib_file_name" in self.c):
+			calib_file = self.c["calib_file_name"]
+			#check if it exists
+			if(os.path.exists(calib_file)):
+				#load the file. NOTE: if you have an issue
+				#finding the branch adc_to_mv in the config_tree, you likely
+				#have not "preprocessed" the linearity scans, which can be found
+				#in "scripts/ReprocessLinearityCurves.ipynb"
+				with uproot.open(calib_file) as f:
+					tb = np.reshape(f["config_tree"]["time_offsets"].array(library="np"), (30,256))
+
+				#rearrange the channels
+				tb = tb[chan_rearrange, :]
+				#put in units of nanoseconds
+				self.times = tb*1e9
+				return self.times #in case they use right away
+			else:
+				print("Can't find the filepath for the calibration file: {}	".format(calib_file))
+				dt = 1.0/(40e6*256)*1e9
+				self.times = np.array([[i*dt for i in range(256)] for j in range(30)])
+				return self.times
+		else:
+			print("No calibration file key in configuration file. Please create a key called 'calib_file_name' with the path to the calibration file.")
+			dt = 1.0/(40e6*256)*1e9
+			self.times = np.array([[i*dt for i in range(256)] for j in range(30)])
+			return self.times
+
+
+
+	#I attemped to have file writing and reading use root trees. I failed. 
+	#For now I am pickling the stuff. 
+	def write_events_to_file(self, outpath):
+		#check that outpath has a .root extension
+		if(outpath.split(".")[-1] != "p"):
+			print("Output file must have a .p extension. Not saving!")
+			#I choose to force the user to change their driving code instead
+			#of fixing the filename, so that they are well aware of this requirement. 
+			return
+
+		pickle.dump([{"events":self.events, "times":self.times}], open(outpath, "wb"))
+
+
+	def read_events_from_file(self, inpath):
+		#check that inpath has a .root extension
+		if(inpath.split(".")[-1] != "p"):
+			print("Input file must have a .p extension. Not loading!")
+			#I choose to force the user to change their driving code instead
+			#of fixing the filename, so that they are well aware of this requirement. 
+			return
+
+		d = pickle.load(open(inpath, "rb"))[0]
+		self.events = d["events"]
+		self.times = d["times"]
+
+
+			
+			
+
+
+
+			

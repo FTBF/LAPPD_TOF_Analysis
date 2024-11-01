@@ -4,7 +4,7 @@
 acdc_id: 43 #board number of the ACDC
 lappd_id: 86 #LAPPD number from Incom
 acc_id: 0 #ACC number (see inventory)
-station_id: 0 #Presently used to identify the "b0" vs "b1" in filename tags that identify stations
+station_id: 1 #Presently used to identify the "b0" vs "b1" in filename tags that identify stations
 sync_ch: 5 #Channel where there is a sine wave input for synchronization
 
 #calibration related info

@@ -351,8 +351,11 @@ class Acdc:
 			dt = 1.0/(40e6*256)*1e9
 			self.times = np.array([[i*dt for i in range(256)] for j in range(30)])
 			return self.times
-
-
+		
+	#a quick function to populate default times, sometimes needed when timebase data is wierd
+	def load_default_times(self):
+		dt = 1.0/(40e6*256)*1e9
+		self.times = np.array([[i*dt for i in range(256)] for j in range(30)])
 
 	#I attemped to have file writing and reading use root trees. I failed. 
 	#For now I am pickling the stuff. 

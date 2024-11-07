@@ -67,21 +67,15 @@ class Acdc:
 		self.adc_to_mv = [] 
 		
 
-		#the output data structure contains many reduced
-		#quantities that form an event indexed dataframe. 
-		#load the yaml file containing these reduced quantities
-		#notes on reduced data output structure
-		try:
-			with open(self.c["rq_file"], 'r') as yf:
-				self.rq_config = yaml.safe_load(yf)
-		except FileNotFoundError:
-			print(f'{self.c["rq_file"]} doesn\'t exist')
-			self.rq_config = None
-		
-		self.output = {}
-		for key, init_value in self.rq_config.items():
-			self.output[key] = init_value
+		#data reduction structures. Initialized when
+		#data reduction is started. 
+		self.rq_confit = None
+		self.rqs = {} #the output of data reduction. 
 
+
+
+
+	#############Pre reduction functions####################
 
 	#This is a temporary method that should be more generalized,
 	#as it now requires us to have a specific filename format for all runs. 
@@ -387,7 +381,47 @@ class Acdc:
 		self.times = d["times"]
 
 
-			
+	####################End prereduction functions#################################
+
+
+
+	####################reduction functions###################################
+
+	def initialize_rqs(self):
+		#the output data structure contains many reduced
+		#quantities that form an event indexed dataframe. 
+		#load the yaml file containing these reduced quantities
+		#notes on reduced data output structure
+		try:
+			with open(self.c["rq_file"], 'r') as yf:
+				self.rq_config = yaml.safe_load(yf)
+		except FileNotFoundError:
+			print(f'{self.c["rq_file"]} doesn\'t exist')
+			self.rq_config = None
+		
+		self.rqs = {}
+		#initialize the global event branches (not channel specific)
+		for key, str_type in self.rq_config["global"].items():
+			self.rqs[key] = []
+
+		#initialize the channel specific branches
+		for ch in range(30):
+			for key, str_type in self.rq_config["channel"].items():
+				self.rqs["ch{:d}_{}".format(ch, key)] = []
+
+
+	def reduce_data(self):
+
+		#initialize the reduced quantities data structure
+		self.initialize_rqs()
+
+		#uses information on the trigger time to roll
+		#the buffer of the waveforms to be causal, which
+		#also expands the data volume due to a need for time-bases
+		#to match the rolling, which will be different for every event. 
+		#self.roll_waveforms()
+
+
 			
 
 

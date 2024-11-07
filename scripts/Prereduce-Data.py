@@ -33,13 +33,9 @@ for acdc_num, a in acdcs.items():
 	#the configuration is now parsed, so we can find which station id
 	#in order to parse the filetag at the end of the data filenames. 
 	bnum = a["obj"].c["station_id"]
-	if(bnum == 0): continue
 
 	#find all the data files for this board
 	a["infiles"] = glob.glob(datadir + f"Raw_Proton*b{bnum}.txt")
-	#actually, hacking this to select a few prime files
-	a["infiles"] = glob.glob(datadir + f"Raw_Proton*135251*b{bnum}.txt")
-	a["infiles"] += glob.glob(datadir + f"Raw_Proton*134743*b{bnum}.txt")
 
 	#find all the pedestal files for this board
 	a["pedfiles"] = glob.glob(datadir + f"Raw_test*b{bnum}.txt")
@@ -50,6 +46,9 @@ for acdc_num, a in acdcs.items():
 	# it is so resource and RAM intensive that I instead opt to save
 	#a pre-reduced output file for each input file, looping individually. 
 	for f in a["infiles"]:
+		if(f.replace(".txt", "_prereduced.p") in glob.glob(datadir + f"*prereduced.p")):
+			print(f"Skipping {f}, already pre-reduced.")
+			continue
 		#the function can take a list of files, 
 		#so I pass just the one we are working on
 		a["obj"].load_raw_data_to_events([f]) 

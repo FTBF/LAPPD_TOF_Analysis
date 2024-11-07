@@ -273,12 +273,16 @@ class Acdc:
 			print("On event {:d} of {:d}".format(i, len(self.events)))
 			#find the pedestal data for this event
 			ped = processed_pedestals[ev["filename"]]
-			#convert to mV and subtract pedestal for each capacitor
+			waves = ev["waves"]
+			#the calibrated waves (to modify)
 			new_waves = np.zeros((30, 256))
-			for ch in range(len(ev["waves"])):
-				for cap in range(len(ev["waves"][ch])):
-					sample = ev["waves"][ch][cap]
-					new_waves[ch][cap] = adc_to_mv[ch][cap][sample] - ped[ch][cap]
+
+			#uses "fancy indexing" to (1) select values along the last dimension of adc_to_mv,
+			#which is the mV associated with each ADC value,. The waves[..., np.newaxis] part 
+			#reshapes waves to be (30, 256, 1) to match the shape of adc_to_mv indexing. 
+			#This results in reshaped_adc_to_mv being adc_to_mv[ch, cap, waves[ch, cap]] for each ch and cap. 
+			reshaped_adc_to_mv = np.take_along_axis(adc_to_mv, waves[...,np.newaxis], axis=2)[...,0]
+			new_waves = reshaped_adc_to_mv - ped
 		
 			all_new_waves.append(new_waves)
 

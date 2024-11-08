@@ -126,7 +126,7 @@ class Acdc:
 					#reformat the times and data and pack into our data structure
 					temp = {}
 					temp["sys_time"] = sys_time #number of 320 MHz clock cycles
-					temp["wr_time"] = wr_time #number of ??? clock cycles.  
+					temp["wr_time"] = wr_time #a combined 2 x 32 bit numbers that are the WR time and PPS
 					#a hint to the above may be that the old code had
 					#((wr_time>>32) & 0xffffffff) + 1e-9*(4*(wr_time & 0xffffffff))
 					temp["filename"] = raw_data_path.split("/")[-1]
@@ -412,14 +412,47 @@ class Acdc:
 
 	def reduce_data(self):
 
+		############initialization functions##############
 		#initialize the reduced quantities data structure
 		self.initialize_rqs()
 
+		#populate that RQ structure with some carryover quantities
+		#from the self.events array that were just from raw files. 
+		self.rqs["evt_count"] = self.events["evt_count"]
+		self.rqs["filename"] = self.events["filename"]
+		self.rqs["file_timestamp"] = self.events["file_timestamp"]
+		self.rqs["sys_time"] = self.events["sys_time"]
+		#In the future, it would be wise to decompose the two 32 bit words
+		#of wr_time during pre-reduction. But for now, I include it here. 
+		wr_times = np.array(self.events["wr_time"])
+		self.rqs["pps"] = ((wr_times >> 32) & 0xffffffff) #the 1 Hz counter referencing 250 MHz WR ZEN
+		self.rqs["wr_time"] = (wr_times & 0xffffffff) #the 250 MHz counter from WR ZEN that resets every 1 second
+
+		#####event vectorized operations############
+
 		#uses information on the trigger time to roll
-		#the buffer of the waveforms to be causal, which
-		#also expands the data volume due to a need for time-bases
-		#to match the rolling, which will be different for every event. 
+		#the buffer of the waveforms to be causal
 		#self.roll_waveforms()
+
+		#analyze baselines, populate baseline values and STDs,
+		#and baseline subtract waveforms. Uses a coarse, vectorized
+		#analysis that knows nothing about peak locations. Takes
+		#input on baseline samples from the configuration files. 
+		#self.analyze_and_subtract_baselines()
+
+		#find the maximum amplitude channel for each event
+		#self.find_max_amplitude_channel()
+
+		#find the phase info on WR channels
+		#self.find_wr_phase()
+
+		#########event looped operations###############
+		for i, ev in enumerate(self.events):
+			#find the peak locations and amplitudes
+			#self.reconstruct_peaks(ev)
+			
+
+
 
 
 			

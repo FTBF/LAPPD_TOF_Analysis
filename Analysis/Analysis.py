@@ -17,4 +17,4 @@ class Analysis:
 
 		self.acdcs = acdcs #class is only passed the acdcs that are selected as active by the GUI. 
 
-
+		

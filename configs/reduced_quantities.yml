@@ -8,13 +8,13 @@ global:
   wr_time: int #250 MHz counter PLLd from 100 MHz output of WR ZEN
   filename: string #name of the file the event came from
   file_time: float #timestamp unix epoch from filename 
-  evidx: int #event index in the file it came from
+  evt_count: int #event index in the file it came from
   pps: float #1 Hz counter pulse-per-second from WR ZEN
   first_peak: float #times in ns of first pulse hitting readout
   wr_phi: float #phase from fitting sin(omega*t - phi)
   wr_freq: float #the WR 250 MHz frequency, in case it is not fixed
   max_ch: float #channel with the maximum amplitude
-  start_cap: float #left bound of the trigger octant, from 0 to 255
+  start_cap: int #left bound of the trigger octant, from 0 to 255
   error_codes: array_int #a list of error codes for the event that indicate why it failed to reconstruct
   total_charge: float #add unit later, total charge in the event from reconstructable waveforms
 
@@ -27,3 +27,4 @@ channel:
   max: float #mV, maximum amplitude of the channel
   min: float #mV, minimum amplitude of the channel
   is_hit: int #0 or 1, whether the channel has enough amplitude to consider for reconstruction
+  peak_times: array_float #only if is_hit, times in ns of the peaks in the channel

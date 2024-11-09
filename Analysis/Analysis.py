@@ -16,10 +16,10 @@ class Analysis:
 	def __init__(self, config, acdcs):
 
 		self.acdcs = acdcs #class is only passed the acdcs that are selected as active by the GUI. 
-	def convert_wr_counter_in_seconds(self, b64num):
+	def convert_wr_counter_in_seconds(self, acdc):
 		#The first 32 bits are PPS. The other 32 bits are 250 MHz counters. We return the number in seconds.
-		PPS = b64num >> 32
-		counter = b64num & 0xFFFFFFFF
+		PPS = acdc.events["pps"]
+		counter = acdc.events["wr_time"]
 		return PPS + counter/250e6
 		
 	def construct_coincidence(self, acdc1, acdc2):
@@ -27,8 +27,8 @@ class Analysis:
 		#Output the list of pairs of indexes of events that are within the WR_COUNT_TOLERANCE of each other.
 		WR_COUNT_TOLERANCE = 1e-8 #10 ns
 		coincidences = []
-		acdc1_wr_seconds = self.convert_wr_counter_in_seconds(acdc1.events["wr_time"])
-		acdc2_wr_seconds = self.convert_wr_counter_in_seconds(acdc2.events["wr_time"])
+		acdc1_wr_seconds = self.convert_wr_counter_in_seconds(acdc1)
+		acdc2_wr_seconds = self.convert_wr_counter_in_seconds(acdc2)
 		#First, we use the assumption that the second list is displaced from the first list by a constant integer. Our initial guess is the difference of medians.
 		median_diff_int_seconds = round(np.median(acdc2_wr_seconds) - np.median(acdc1_wr_seconds))
 		j2 = 0 #Dynamic programming to speed up the search

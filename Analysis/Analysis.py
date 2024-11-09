@@ -42,4 +42,4 @@ class Analysis:
 		print("construct_coincidence found", len(coincidences), "coincidences.")
 		return coincidences, median_diff_int_seconds
 
-
+		

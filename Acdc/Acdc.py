@@ -67,21 +67,15 @@ class Acdc:
 		self.adc_to_mv = [] 
 		
 
-		#the output data structure contains many reduced
-		#quantities that form an event indexed dataframe. 
-		#load the yaml file containing these reduced quantities
-		#notes on reduced data output structure
-		try:
-			with open(self.c["rq_file"], 'r') as yf:
-				self.rq_config = yaml.safe_load(yf)
-		except FileNotFoundError:
-			print(f'{self.c["rq_file"]} doesn\'t exist')
-			self.rq_config = None
-		
-		self.output = {}
-		for key, init_value in self.rq_config.items():
-			self.output[key] = init_value
+		#data reduction structures. Initialized when
+		#data reduction is started. 
+		self.rq_confit = None
+		self.rqs = {} #the output of data reduction. 
 
+
+
+
+	#############Pre reduction functions####################
 
 	#This is a temporary method that should be more generalized,
 	#as it now requires us to have a specific filename format for all runs. 
@@ -132,7 +126,7 @@ class Acdc:
 					#reformat the times and data and pack into our data structure
 					temp = {}
 					temp["sys_time"] = sys_time #number of 320 MHz clock cycles
-					temp["wr_time"] = wr_time #number of ??? clock cycles.  
+					temp["wr_time"] = wr_time #a combined 2 x 32 bit numbers that are the WR time and PPS
 					#a hint to the above may be that the old code had
 					#((wr_time>>32) & 0xffffffff) + 1e-9*(4*(wr_time & 0xffffffff))
 					temp["filename"] = raw_data_path.split("/")[-1]
@@ -273,12 +267,16 @@ class Acdc:
 			print("On event {:d} of {:d}".format(i, len(self.events)))
 			#find the pedestal data for this event
 			ped = processed_pedestals[ev["filename"]]
-			#convert to mV and subtract pedestal for each capacitor
+			waves = ev["waves"]
+			#the calibrated waves (to modify)
 			new_waves = np.zeros((30, 256))
-			for ch in range(len(ev["waves"])):
-				for cap in range(len(ev["waves"][ch])):
-					sample = ev["waves"][ch][cap]
-					new_waves[ch][cap] = adc_to_mv[ch][cap][sample] - ped[ch][cap]
+
+			#uses "fancy indexing" to (1) select values along the last dimension of adc_to_mv,
+			#which is the mV associated with each ADC value,. The waves[..., np.newaxis] part 
+			#reshapes waves to be (30, 256, 1) to match the shape of adc_to_mv indexing. 
+			#This results in reshaped_adc_to_mv being adc_to_mv[ch, cap, waves[ch, cap]] for each ch and cap. 
+			reshaped_adc_to_mv = np.take_along_axis(adc_to_mv, waves[...,np.newaxis], axis=2)[...,0]
+			new_waves = reshaped_adc_to_mv - ped
 		
 			all_new_waves.append(new_waves)
 
@@ -351,8 +349,11 @@ class Acdc:
 			dt = 1.0/(40e6*256)*1e9
 			self.times = np.array([[i*dt for i in range(256)] for j in range(30)])
 			return self.times
-
-
+		
+	#a quick function to populate default times, sometimes needed when timebase data is wierd
+	def load_default_times(self):
+		dt = 1.0/(40e6*256)*1e9
+		self.times = np.array([[i*dt for i in range(256)] for j in range(30)])
 
 	#I attemped to have file writing and reading use root trees. I failed. 
 	#For now I am pickling the stuff. 
@@ -380,7 +381,80 @@ class Acdc:
 		self.times = d["times"]
 
 
+	####################End prereduction functions#################################
+
+
+
+	####################reduction functions###################################
+
+	def initialize_rqs(self):
+		#the output data structure contains many reduced
+		#quantities that form an event indexed dataframe. 
+		#load the yaml file containing these reduced quantities
+		#notes on reduced data output structure
+		try:
+			with open(self.c["rq_file"], 'r') as yf:
+				self.rq_config = yaml.safe_load(yf)
+		except FileNotFoundError:
+			print(f'{self.c["rq_file"]} doesn\'t exist')
+			self.rq_config = None
+		
+		self.rqs = {}
+		#initialize the global event branches (not channel specific)
+		for key, str_type in self.rq_config["global"].items():
+			self.rqs[key] = []
+
+		#initialize the channel specific branches
+		for ch in range(30):
+			for key, str_type in self.rq_config["channel"].items():
+				self.rqs["ch{:d}_{}".format(ch, key)] = []
+
+
+	def reduce_data(self):
+
+		############initialization functions##############
+		#initialize the reduced quantities data structure
+		self.initialize_rqs()
+
+		#populate that RQ structure with some carryover quantities
+		#from the self.events array that were just from raw files. 
+		self.rqs["evt_count"] = self.events["evt_count"]
+		self.rqs["filename"] = self.events["filename"]
+		self.rqs["file_timestamp"] = self.events["file_timestamp"]
+		self.rqs["sys_time"] = self.events["sys_time"]
+		#In the future, it would be wise to decompose the two 32 bit words
+		#of wr_time during pre-reduction. But for now, I include it here. 
+		wr_times = np.array(self.events["wr_time"])
+		self.rqs["pps"] = ((wr_times >> 32) & 0xffffffff) #the 1 Hz counter referencing 250 MHz WR ZEN
+		self.rqs["wr_time"] = (wr_times & 0xffffffff) #the 250 MHz counter from WR ZEN that resets every 1 second
+
+		#####event vectorized operations############
+
+		#uses information on the trigger time to roll
+		#the buffer of the waveforms to be causal
+		#self.roll_waveforms()
+
+		#analyze baselines, populate baseline values and STDs,
+		#and baseline subtract waveforms. Uses a coarse, vectorized
+		#analysis that knows nothing about peak locations. Takes
+		#input on baseline samples from the configuration files. 
+		#self.analyze_and_subtract_baselines()
+
+		#find the maximum amplitude channel for each event
+		#self.find_max_amplitude_channel()
+
+		#find the phase info on WR channels
+		#self.find_wr_phase()
+
+		#########event looped operations###############
+		for i, ev in enumerate(self.events):
+			#find the peak locations and amplitudes
+			#self.reconstruct_peaks(ev)
 			
+
+
+
+
 			
 
 

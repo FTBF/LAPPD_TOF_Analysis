@@ -10,9 +10,7 @@ import scipy.interpolate as spi
 from statsmodels.nonparametric.smoothers_lowess import lowess
 import os
 import pickle
-
-sys.path.append("../")
-import util
+import Util
 
 global chan_rearrange 
 chan_rearrange = np.array([5,4,3,2,1,0,11,10,9,8,7,6,17,16,15,14,13,12,23,22,21,20,19,18,29,28,27,26,25,24])
@@ -449,8 +447,33 @@ class Acdc:
 		#########event looped operations###############
 		for i, ev in enumerate(self.events):
 			#find the peak locations and amplitudes
-			#self.reconstruct_peaks(ev)
+			#self.reconstruct_peaks(ev)]
+			pass
+	###########################Analysis functions####################################
+	def calc_longitudinal_pos(self):
+		pass
+
+
+	#Rough Benchmark on Jinseo's cpu: 60 seconds to process 10000 events
+	def populate_ch_rqs(self):
+		print("Populating channel specific reduced quantities...")
+		waves = np.array(self.events["waves"])
+		baselines = np.apply_along_axis(Util.find_baseline, 2, waves)
+		max_values = np.max(waves, axis=2)
+		min_values = np.min(waves, axis=2)
+		std_values = np.std(waves, axis=2)
+		is_hits = np.apply_along_axis(Util.determine_hit, 2, waves)
+		for ch in range(30):
+			self.events["ch{}_baseline".format(ch)] = baselines[:, ch]
+			self.events["ch{}_max".format(ch)] = max_values[:, ch]
+			self.events["ch{}_min".format(ch)] = min_values[:, ch]
+			self.events["ch{}_std".format(ch)] = std_values[:, ch]
+			self.events["ch{}_is_hit".format(ch)] = is_hits[:, ch]
+
 			
+				
+			
+	
 
 
 

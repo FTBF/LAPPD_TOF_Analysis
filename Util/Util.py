@@ -247,6 +247,22 @@ def sin_const_back(x, A, omega, phi, B):
 def sin_const_back_250(x, A, phi, B):
 	return A*np.sin(2*np.pi*0.25*x-phi)+B
 
+def find_baseline(ydata):
+	#Exclude first quarter and last quarter of data and then take the mean of the rest.
+	size = len(ydata)
+	return np.mean(ydata[int(size/4):int(3*size/4)])
+
+def determine_hit(ydata):
+	#Return 1 if the max of the waveform is particle hit, 0 otherwise.
+	robust_min = np.percentile(ydata, 5)
+	robust_max = np.percentile(ydata, 95)
+	baseline = find_baseline(ydata)
+	if 3*np.clip(robust_max - baseline, a_min = 0, a_max = None) < (baseline - robust_min): #Ratio is arbitrary. Ratio is 1 for a sine wave.
+		return 1
+	else:
+		return 0
+
+
 def calc_vpos(xv, yv, mu0):
 		p0 = [-0.25*yv.max(), 0.01, mu0, 0.8]
 		popt, pcov = curve_fit(gauss_const_back, xv, yv, p0=p0)

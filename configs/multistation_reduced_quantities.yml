@@ -1,0 +1,20 @@
+
+#RQ that are gobal to each event, as opposed to on a channel-to-channel basis
+global:
+  track_id: int #Index of the identified particle track. Starts from 0.
+  polar_angle_phi: float #Particle Direction Polar Angles. Angle between the horizontal plane and the (particle direction , z axis) plane
+  polar_angle_theta: float #Particle Direction Polar Angles. Angle between the normal to the LAPPD (z axis) and the particle direction
+  wr_seconds: int #WR time when the particle hit the frontmost station
+  stations_acdc_id: array_int #ACDC ID of the stations that the particle hit, in order of arrival
+  stations_lappd_id: array_int #LAPPD ID of the stations that the particle hit, in order of arrival
+  stations_z: array_float #z position of the stations that the particle hit, in order of arrival. +z is the beam direction.
+  stations_x: array_float #x position of the stations that the particle hit, in order of arrival. +x is determined by +y cross +z
+  stations_y: array_float #y position of the stations that the particle hit, in order of arrival. +y is the vertical direction.
+  stations_orientation: array_string #Strip Orientation of the stations that the particle hit, in order of arrival. Each entry is an element of the Dihedral group D4: Format to be determined.
+  filenames: array_string #name of the file the events came from.
+  file_timestamps: array_float #timestamp unix epoch from filename.
+  time_of_flight: array_float #arrival time of the particle at each station, relative to that of the first station. For example, time_of_flight[0] is the time it took for the particle to travel from the first station to the second station.
+  involved_evts: array_int #event index in the files the track is constructed from.
+  error_codes: array_int #a list of error codes for the event that indicate why it failed to reconstruct.
+
+			

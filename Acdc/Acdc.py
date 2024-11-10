@@ -458,8 +458,9 @@ class Acdc:
 
 	#Rough Benchmark on Jinseo's cpu: 60 seconds to process 10000 events
 	#Populate everything except the peak times, which are event looped and much slower
-	def populate_ch_rqs(self):
-		print("Populating channel specific reduced quantities...")
+	def populate_ch_rqs(self, verbose = False):
+		if(verbose):
+			print("Populating channel specific reduced quantities...")
 		waves = np.array(self.events["waves"])
 		baselines = np.apply_along_axis(Util.find_baseline, 2, waves)
 		max_values = np.max(waves, axis=2)
@@ -473,20 +474,30 @@ class Acdc:
 			self.events["ch{}_std".format(ch)] = std_values[:, ch]
 			self.events["ch{}_is_hit".format(ch)] = is_hits[:, ch]
 
-	def reconstruct_peak_time(self):	
+	def reconstruct_peak_time(self, verbose = False):	
 		waves = np.array(self.events["waves"])
-		for ch in range(30):	
+		for ch in range(30):
+			baselines = self.events["ch{}_baseline".format(ch)]
+			min_values = self.events["ch{}_min".format(ch)]
+			start_caps = self.rqs["start_cap"]
 			peak_times_ch = []
+			success = 0
 			#Apply peak finding to events whose is_hit is true and populate the peak info.
-			for is_hit, ev in enumerate(self.events["ch{}_is_hit".format(ch)]):
-				if bool(is_hit):
+			#This can be parallelized in the future as well.
+			for ev, is_hit in enumerate(self.events["ch{}_is_hit".format(ch)]):
+				if (is_hit==1):
 					try:
-						peak_times_ch.append(Util.find_peak_time(waves[ev, ch], self.times[ch]))
+						success += 1
+						peak_times_ch.append(Util.find_peak_time(ydata = waves[ev, ch], y_baseline = baselines[ev], y_robust_min = min_values[ev], x_start_cap = start_caps[ev], timebase_ns= self.times[ch]))
 					except ValueError:
 						peak_times_ch.append([-1, -1])
 						self.rqs["error_codes"][ev].append(1109)
 				else:
 					peak_times_ch.append([-1, -1])
+			if verbose:
+				print("Populated peak times for channel {:d}".format(ch))
+				#Print the number of non default peak times to check for errors
+				print("Number of non-default peak times for channel {:d}: {:d}".format(ch, success))
 			self.events["ch{}_peak_times".format(ch)] = peak_times_ch
 
 		

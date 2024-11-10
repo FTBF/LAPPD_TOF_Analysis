@@ -1,7 +1,7 @@
 import numpy as np
 from scipy.optimize import curve_fit
 from scipy.interpolate import splrep, BSpline, CubicSpline, PPoly
-from scipy.signal import find_peaks
+from scipy.signal import find_peaks, find_peaks_cwt
 from matplotlib import pyplot as plt
 from scipy.integrate import trapezoid
 import numba
@@ -139,7 +139,7 @@ def compute_sliding_function(xdata, ydata, lbound, rbound, stat_spline, func, sl
 
 	return lags, func_vals
 
-def find_leading_edge(xdata, ydata, display, SPLINE_CFD=False):
+def find_leading_edge(xdata, ydata, SPLINE_CFD=False):
 
 	# Determines the indices of the peaks in the prompt and reflected pulses
 	height_cutoff = -0.6*ydata.max()
@@ -206,27 +206,6 @@ def find_leading_edge(xdata, ydata, display, SPLINE_CFD=False):
 	lbound = prompt_cubic_spline.solve(reflect_peak_min_val, extrapolate=False)[0]
 	rbound = prompt_cubic_spline.solve(0.9*prompt_peak_max, extrapolate=False)[0]
 
-	if display:
-		fig3, ax3 = plt.subplots()
-		ax3.scatter(xdata, ydata, marker='.', label='Raw data')
-
-		# reflect_peak_spline_domain = np.linspace(xdata[reflect_lbound], xdata[reflect_ubound-1], 100)
-		# ax3.plot(reflect_peak_spline_domain, reflect_bspline(reflect_peak_spline_domain), color='orange', label='Reflected Pulse Spline')
-
-		prompt_peak_spline_domain = np.linspace(xdata[prompt_lbound], xdata[prompt_ubound-1], 100)
-		ax3.plot(prompt_peak_spline_domain, prompt_bspline(prompt_peak_spline_domain), color='green')
-		# ax3.plot(2.22, reflect_peak_min_val, marker='o', color='red', label='intersection')
-
-		# ax3.axhline(reflect_peak_min_val, color='magenta', label=f'{round(100*reflect_peak_min_val/reflect_peak_max, 2)}% of reflect peak max')
-		ax3.axvline(lbound, color='red', label=f'Lower bound ({round(100*reflect_peak_min_val/prompt_peak_max, 2)}% of \nprompt peak max)')
-		ax3.axvline(rbound, color='purple', label='Upper bound (90% of \nprompt peak max)')
-		ax3.legend(loc='lower right')
-		ax3.set_xlabel('Sample time (ns)')
-		ax3.set_ylabel('ADC Count')
-		ax3.set_title('Reflection-dependent Leading Edge Bounds')
-		ax3.set_xlim(1.6, 9.1)
-		plt.show()
-	
 	if SPLINE_CFD:
 		reflect_cubicspline = CubicSpline(reflect_subdomain, reflect_bspline(reflect_subdomain))
 		r_intersects = reflect_cubicspline.solve(reflect_peak_min_val, extrapolate=False)
@@ -261,10 +240,23 @@ def determine_hit(ydata):
 		return 1
 	else:
 		return 0
-def find_peak_time(ydata, timebase):
-	#Find the time of the peak of the waveform.
-	#This function is a dummy function for now.
-	return [timebase[np.argmax(ydata)]]
+def find_peak_time(ydata, y_baseline, y_robust_min, x_start_cap, timebase_ns):
+	"""Finds the time of the peak of the waveform
+	
+	Arguments:	
+		(ndarray)	ydata:		1 dimensional array representing the waveform
+		(float)		y_baseline:	peaks are found by comparing the waveform to this value
+		(float)		y_robust_min:peaks are found by comparing the waveform to this value
+		(int)		x_start_cap:index of ydata at which the waveform starts, i.e. most temporally advanced sample in the waveform
+		(ndarray)	timebase_ns:	the time distance (in nanoseconds) between i th and i+1 th sample in ydata. must have the same length as ydata
+	"""
+	ydata_rolled = np.roll(ydata, -x_start_cap) #In ydata, a peak may appear across the wraparound, rendering it disjoint. Hopefully all peaks are smooth in ydata_rolled.
+	timebase_rolled = np.roll(timebase_ns, -x_start_cap)
+	#First, we find integer indices of the peaks. This is computationally cheap. After that, we will interpolate to find the peak time with 1 ps resolution.
+	peaks, props = find_peaks(ydata_rolled, height=0.8*(y_baseline-y_robust_min), width = 10, distance=20)#These numbers heavily depend on LAPPD characteristics and are subject to change.
+	#peaks_cwt = find_peaks_cwt(vector = ydata_rolled, width = 10)#Alternative method.
+	
+	return [timebase_rolled[int(peak)] for peak in peaks]
 
 
 def calc_vpos(xv, yv, mu0):
@@ -302,26 +294,6 @@ def leading_edge_bounds(xh, yh):
 		
 		lbound = cspline.solve(lbound_y, extrapolate=False)[0]
 		rbound = cspline.solve(rbound_y, extrapolate=False)[0]
-
-		fig, ax = plt.subplots()
-		ax.scatter(xh, yh, marker='.', color='black')
-		domain = np.linspace(subdomain[0], subdomain[-1], 100)
-		ax.plot(domain, cspline(domain), color='red')
-		ax.axvline(lbound, color='blue')
-		ax.axvline(rbound, color='blue')
-		ax.axvline(xh[reflect_ind], color='green')
-		plt.show()
-
-		# tck = splrep(subdomain, subrange, s=0.0005)
-		# bspline = BSpline(*tck)
-
-		# fig, ax = plt.subplots()
-		# ax.scatter(xh, yh, marker='.', color='black')
-		# ax.plot(domain, bspline(domain), color='green')
-		# ax.axvline(lbound, color='blue')
-		# ax.axvline(rbound, color='blue')
-		# plt.show()
-
 		return lbound, rbound, reflect_ind
 
 def find_lsquares(xh, yh, lbound, rbound, offsets):

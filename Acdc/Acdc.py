@@ -425,8 +425,10 @@ class Acdc:
 		wr_times = np.array(self.events["wr_time"])
 		self.rqs["pps"] = ((wr_times >> 32) & 0xffffffff) #the 1 Hz counter referencing 250 MHz WR ZEN
 		self.rqs["wr_time"] = (wr_times & 0xffffffff) #the 250 MHz counter from WR ZEN that resets every 1 second
-
+		self.rqs["start_cap"] = (((self.events["sys_time"]+2+2)%8)*32-16)%256 #the starting capacitor for the event. This is set by Joe Pastika's firmware.
 		#####event vectorized operations############
+
+		self.populate_ch_rqs()
 
 		#uses information on the trigger time to roll
 		#the buffer of the waveforms to be causal
@@ -455,6 +457,7 @@ class Acdc:
 
 
 	#Rough Benchmark on Jinseo's cpu: 60 seconds to process 10000 events
+	#Populate everything except the peak times, which are event looped and much slower
 	def populate_ch_rqs(self):
 		print("Populating channel specific reduced quantities...")
 		waves = np.array(self.events["waves"])
@@ -469,6 +472,24 @@ class Acdc:
 			self.events["ch{}_min".format(ch)] = min_values[:, ch]
 			self.events["ch{}_std".format(ch)] = std_values[:, ch]
 			self.events["ch{}_is_hit".format(ch)] = is_hits[:, ch]
+
+	def reconstruct_peak_time(self):	
+		waves = np.array(self.events["waves"])
+		for ch in range(30):	
+			peak_times_ch = []
+			#Apply peak finding to events whose is_hit is true and populate the peak info.
+			for is_hit, ev in enumerate(self.events["ch{}_is_hit".format(ch)]):
+				if bool(is_hit):
+					try:
+						peak_times_ch.append(Util.find_peak_time(waves[ev, ch], self.times[ch]))
+					except ValueError:
+						peak_times_ch.append([-1, -1])
+						self.rqs["error_codes"][ev].append(1109)
+				else:
+					peak_times_ch.append([-1, -1])
+			self.events["ch{}_peak_times".format(ch)] = peak_times_ch
+
+		
 
 			
 				

@@ -261,6 +261,10 @@ def determine_hit(ydata):
 		return 1
 	else:
 		return 0
+def find_peak_time(ydata, timebase):
+	#Find the time of the peak of the waveform.
+	#This function is a dummy function for now.
+	return [timebase[np.argmax(ydata)]]
 
 
 def calc_vpos(xv, yv, mu0):

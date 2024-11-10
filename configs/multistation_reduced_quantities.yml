@@ -13,7 +13,7 @@ global:
   stations_orientation: array_string #Strip Orientation of the stations that the particle hit, in order of arrival. Each entry is an element of the Dihedral group D4: Format to be determined.
   filenames: array_string #name of the file the events came from.
   file_timestamps: array_float #timestamp unix epoch from filename.
-  time_of_flight: array_float #arrival time of the particle at each station, relative to that of the first station. For example, time_of_flight[0] is the time it took for the particle to travel from the first station to the second station.
+  time_of_flight_ns: array_float #arrival time of the particle at each station in nanoseconds, relative to that of the first station. For example, time_of_flight[0] is the time it took for the particle to travel from the first station to the second station.
   involved_evts: array_int #event index in the files the track is constructed from.
   error_codes: array_int #a list of error codes for the event that indicate why it failed to reconstruct.
 

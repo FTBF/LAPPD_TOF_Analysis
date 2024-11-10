@@ -258,6 +258,22 @@ def find_peak_time(ydata, y_baseline, y_robust_min, x_start_cap, timebase_ns):
 	
 	return [timebase_rolled[int(peak)] for peak in peaks]
 
+def find_sine_phase(ydata, timebase_ns, x_start_cap, x):
+		"""
+		Finds the phase of a sine wave in the waveform.
+		x must refer to a point in the waveform that is not in the trigger region, AFTER the rollover.
+		"""
+		#Sine wave frequency in gigahertz. Note that sin_const_back_250 must be adjusted if this is changed.
+		FREQ = 0.25
+
+
+		ydata_rolled = np.roll(ydata, -x_start_cap)
+		timebase_rolled = np.roll(timebase_ns, -x_start_cap)
+		#Fit the sine wave using curve_fit
+		p0 = [0.1, 0, 0.1]
+		popt, pcov = curve_fit(sin_const_back_250, timebase_rolled, ydata_rolled, p0=p0)
+	
+		return np.remainder(popt[2] + 2*np.pi*FREQ*x, 2*np.pi)
 
 def calc_vpos(xv, yv, mu0):
 		p0 = [-0.25*yv.max(), 0.01, mu0, 0.8]

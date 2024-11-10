@@ -34,8 +34,8 @@ class Analysis:
 		
 	def convert_wr_counter_in_seconds(self, acdc):
 		#The first 32 bits are PPS. The other 32 bits are 250 MHz counters. We return the number in seconds.
-		PPS = acdc.events["pps"]
-		counter = acdc.events["wr_time"]
+		PPS = acdc.rqs["pps"]
+		counter = acdc.rqs["wr_time"]
 		return PPS + counter/250e6
 
 	def construct_tracks(self, acdc1, acdc2):
@@ -61,7 +61,7 @@ class Analysis:
 			temp["polar_angle_phi"], temp["polar_angle_theta"] = self.construct_particle_direction(acdc1, acdc2, event_pairs) 
 
 			#time of flight calculation, mod 4 nanoseconds.
-			temp["time_of_flight"] = [np.remainder(acdc2.events["wr_phi"][event_pairs[1]] - acdc1.events["wr_phi"][event_pairs[0]], acdc1.events["wr_freq"][event_pairs[0]])]
+			temp["time_of_flight_ns"] = [np.remainder(acdc2.events["wr_phi"][event_pairs[1]] - acdc1.events["wr_phi"][event_pairs[0]], 2*np.pi)  * 4 / (2*np.pi)] #nanoseconds, 4 ns per cycle
 
 			temp["filenames"] = [acdc1.events["filename"][event_pairs[0]], acdc2.events["filename"][event_pairs[1]]]
 			temp["file_timestamps"] = [acdc1.events["file_timestamp"][event_pairs[0]], acdc2.events["file_timestamp"][event_pairs[1]]]
@@ -80,10 +80,10 @@ class Analysis:
 		xy_hitpos1 = np.array([acdc1.c["corner_offset"][0]+acdc1.events["hpos"][event_pairs[0]], acdc1.c["corner_offset"][1]+acdc1.events["vpos"][event_pairs[0]]])
 		xy_hitpos2 = np.array([acdc2.c["corner_offset"][0]+acdc2.events["hpos"][event_pairs[1]], acdc2.c["corner_offset"][1]+acdc2.events["vpos"][event_pairs[1]]])
 		
+		#Basic polar angle calculation, assuming the stations are in the same orientation.
 		theta = np.arctan((acdc2.c["zpos"] - acdc1.c["zpos"])/(np.linalg.norm( xy_hitpos2 - xy_hitpos1)))
 		phi = np.arctan2(xy_hitpos2[1] - xy_hitpos1[1], xy_hitpos2[0] - xy_hitpos1[0])
 		return phi, theta
-		
 		
 	def construct_coincidence(self, acdc1, acdc2):
 		#Scan through all events in acdc1. For each event, check if there is a corresponding event in acdc2. The WR clock count is allowed to be off by a certain amount.

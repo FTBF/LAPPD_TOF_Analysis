@@ -10,9 +10,7 @@ import scipy.interpolate as spi
 from statsmodels.nonparametric.smoothers_lowess import lowess
 import os
 import pickle
-
-sys.path.append("../")
-import util
+import Util
 
 global chan_rearrange 
 chan_rearrange = np.array([5,4,3,2,1,0,11,10,9,8,7,6,17,16,15,14,13,12,23,22,21,20,19,18,29,28,27,26,25,24])
@@ -427,8 +425,11 @@ class Acdc:
 		wr_times = np.array(self.events["wr_time"])
 		self.rqs["pps"] = ((wr_times >> 32) & 0xffffffff) #the 1 Hz counter referencing 250 MHz WR ZEN
 		self.rqs["wr_time"] = (wr_times & 0xffffffff) #the 250 MHz counter from WR ZEN that resets every 1 second
-
+		self.rqs["start_cap"] = (((self.events["sys_time"]+2+2)%8)*32-16)%256 #the starting capacitor for the event. This is set by Joe Pastika's firmware.
+		self.rqs["error_codes"] = [[] for i in range(len(self.events["sys_time"]))] #a list of error codes for each event. sys_time is just an example column to get the length of the list.
 		#####event vectorized operations############
+
+		self.populate_ch_rqs()
 
 		#uses information on the trigger time to roll
 		#the buffer of the waveforms to be causal
@@ -449,8 +450,107 @@ class Acdc:
 		#########event looped operations###############
 		for i, ev in enumerate(self.events):
 			#find the peak locations and amplitudes
-			#self.reconstruct_peaks(ev)
+			#self.reconstruct_peaks(ev)]
+			pass
+	###########################Analysis functions####################################
+	def calc_longitudinal_pos(self):
+		pass
+
+
+	#Rough Benchmark on Jinseo's cpu: 60 seconds to process 10000 events
+	#Populate everything except the peak times, which are event looped and much slower
+	def populate_ch_rqs(self, verbose = False):
+		if(verbose):
+			print("Populating channel specific reduced quantities...")
+		waves = np.array(self.events["waves"])
+		baselines = np.apply_along_axis(Util.find_baseline, 2, waves)
+		max_values = np.percentile(waves, 95, axis=2)#For robustness, we use the 95th percentile
+		min_values = np.percentile(waves, 5, axis=2)#For robustness, we use the 5th percentile
+		std_values = np.std(waves, axis=2)
+		is_hits = np.apply_along_axis(Util.determine_hit, 2, waves)
+		for ch in range(30):
+			self.events["ch{}_baseline".format(ch)] = baselines[:, ch]
+			self.events["ch{}_max".format(ch)] = max_values[:, ch]
+			self.events["ch{}_min".format(ch)] = min_values[:, ch]
+			self.events["ch{}_std".format(ch)] = std_values[:, ch]
+			self.events["ch{}_is_hit".format(ch)] = is_hits[:, ch]
+		#Populate max_ch, the channel with the maximum amplitude of |baseline - min| for each event
+		self.rqs["max_ch"] = np.argmax(np.abs(baselines - min_values), axis=1)
+
+	def reconstruct_peak_time(self, verbose = False):	
+		waves = np.array(self.events["waves"])
+		for ch in range(30):
+			baselines = self.events["ch{}_baseline".format(ch)]
+			min_values = self.events["ch{}_min".format(ch)]
+			start_caps = self.rqs["start_cap"]
+			peak_times_ch = []
+			success = 0
+			#Apply peak finding to events whose is_hit is true and populate the peak info.
+			#This can be parallelized in the future as well.
+			for ev, is_hit in enumerate(self.events["ch{}_is_hit".format(ch)]):
+				if (is_hit==1):
+					try:
+						success += 1
+						peak_times_ch.append(Util.find_peak_time(ydata = waves[ev, ch], y_baseline = baselines[ev], y_robust_min = min_values[ev], x_start_cap = start_caps[ev], timebase_ns= self.times[ch]))
+					except ValueError:
+						peak_times_ch.append([-1, -1])
+						self.rqs["error_codes"][ev].append(1109)#Arbitrary error code for peak time finding failure. Not used anywhere else in the code.
+				else:
+					peak_times_ch.append([-1, -1])
+			if verbose:
+				print("Populated peak times for channel {:d}".format(ch))
+				#Print the number of non default peak times to check for errors
+				print("Number of events with non-default peak times for channel {:d}: {:d}".format(ch, success))
+			self.events["ch{}_peak_times".format(ch)] = peak_times_ch
+	def construct_wr_phi(self, verbose = False):
+		"""
+		Constructs the phase of the WR signal for each event.
+		Must be run after reconstruct_peak_time.
+		"""
+		#First we determine the channels to be analyzed.
+		#If max_ch is populated, use that to find the channel with the max amplitude
+		avg_peak_time = []
+		#Create masks for events with exactly two peaks, as we will only analyze these events.
+		two_peaks_mask = []
+		self.rqs["time_measured_ch"] = np.zeros(len(self.events["ch0_is_hit"]))
+		for ev in range(len(self.events["ch0_is_hit"])):#Peculiarly, the length of the is_hit arrays is not the number of events
+			if self.events["ch{}_is_hit".format(self.rqs["max_ch"][ev])][ev] == 1:
+				ch = self.rqs["max_ch"][ev]
+			else:
+				#Find the first channel with is_hit = 1
+				for ch in range(30):
+					if self.events["ch{}_is_hit".format(ch)][ev] == 1:
+						break
+				self.rqs["error_codes"][ev].append(1100)#Arbitrary error code for improper max_ch. Not used anywhere else in the code.
+			self.rqs["time_measured_ch"][ev] = ch
+			avg_peak_time.append(np.mean(self.events["ch{}_peak_times".format(ch)][ev]))
+			two_peaks_mask.append(len(self.events["ch{}_peak_times".format(ch)][ev]) == 2)
+
+		#Using Util.find_sine_phase to find the phase of the WR signal
+		#and populate the rqs with the results.
+		waves = np.array(self.events["waves"])
+		success = 0
+		for ev, is_particle in enumerate(two_peaks_mask):
+			if (is_particle):
+				try:
+					ch = int(self.rqs["time_measured_ch"][ev])
+					phi = Util.find_sine_phase(ydata = waves[ev, self.c["sync_ch"]], timebase_ns = self.times[ch], x_start_cap = self.rqs["start_cap"][ev], x = avg_peak_time[ev])
+					success += 1
+				except ValueError:
+					phi = -1
+					self.rqs["error_codes"][ev].append(1110)#Arbitrary error code for phase finding failure. Not used anywhere else in the code.
+		if verbose:
+			print("Populated WR phi.")
+			#Print the number of non default peak times to check for errors
+			print("Number of events with non-default WR phi: {:d}".format(success))
+		self.rqs["wr_phi"] = phi
+
+		
+
 			
+				
+			
+	
 
 
 

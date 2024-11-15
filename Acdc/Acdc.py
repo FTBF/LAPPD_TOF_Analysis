@@ -412,9 +412,12 @@ class Acdc:
 	def roll_waveforms(self):
 		#Splits the ring buffer into octants and finds a lower bound for the octant that the trigger is in
 		BUFFER_LENGTH = 256
-		OCTANT_LENGTH = BUFFER_LENGTH/8
+		OCTANT_LENGTH = BUFFER_LENGTH/8 #number of samples in the octant
 		NUM_OCTANTS = 8
-		trigger_low_bound = (((self.events["sys_time"]+4)%NUM_OCTANTS)*OCTANT_LENGTH - (OCTANT_LENGTH/2))%BUFFER_LENGTH
+		CLOCK_OFFSET = 4
+
+		#JOE: Please comment on each element of this calculation
+		trigger_low_bound = (((self.events["sys_time"]+CLOCK_OFFSET)%NUM_OCTANTS)*OCTANT_LENGTH - (OCTANT_LENGTH/2))%BUFFER_LENGTH
 		
 		# Stack all waveforms into a single array
 		waves_array = np.stack(self.events["waves"])

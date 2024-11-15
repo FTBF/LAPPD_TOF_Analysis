@@ -226,10 +226,12 @@ def sin_const_back(x, A, omega, phi, B):
 def sin_const_back_250(x, A, phi, B):
 	return A*np.sin(2*np.pi*0.25*x-phi)+B
 
-def find_baseline(ydata):
-	#Exclude first quarter and last quarter of data and then take the mean of the rest.
-	size = len(ydata)
-	return np.mean(ydata[int(size/4):int(3*size/4)])
+#very simple, pre-pulse baseline calculator
+def find_baseline_simple(ydata, samples_before_pulse):
+	return np.mean(ydata[:samples_before_pulse])
+
+def find_baseline_std_simple(ydata, samples_before_pulse):
+	return np.std(ydata[:samples_before_pulse])
 
 def determine_hit(ydata):
 	#Return 1 if the max of the waveform is particle hit, 0 otherwise.
@@ -240,6 +242,8 @@ def determine_hit(ydata):
 		return 1
 	else:
 		return 0
+	
+	
 def find_peak_time(ydata, y_baseline, y_robust_min, x_start_cap, timebase_ns):
 	"""Finds the time of the peak of the waveform
 	

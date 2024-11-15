@@ -447,8 +447,6 @@ class Acdc:
 		self.rqs["error_codes"] = [[] for i in range(len(self.events["sys_time"]))] #a list of error codes for each event. sys_time is just an example column to get the length of the list.
 		#####event vectorized operations############
 
-		self.populate_ch_rqs()
-
 		#uses information on the trigger time to roll
 		#the buffer of the waveforms to be causal
 		self.roll_waveforms()
@@ -457,10 +455,16 @@ class Acdc:
 		#and baseline subtract waveforms. Uses a coarse, vectorized
 		#analysis that knows nothing about peak locations. Takes
 		#input on baseline samples from the configuration files. 
-		#self.analyze_and_subtract_baselines()
+		self.analyze_and_subtract_baselines()
 
 		#find the maximum amplitude channel for each event
-		#self.find_max_amplitude_channel()
+		self.find_minmax_of_channels()
+
+		#get the full standard deviation of the whole waveform
+		self.find_full_std()
+
+		#find channels that seem to be hit by pulses that are reconstructable
+		self.find_hit_chs()
 
 		#find the phase info on WR channels
 		#self.find_wr_phase()
@@ -475,25 +479,47 @@ class Acdc:
 		pass
 
 
-	#Rough Benchmark on Jinseo's cpu: 60 seconds to process 10000 events
-	#Populate everything except the peak times, which are event looped and much slower
-	def populate_ch_rqs(self, verbose = False):
-		if(verbose):
-			print("Populating channel specific reduced quantities...")
+	def find_minmax_of_channels(self):
 		waves = np.array(self.events["waves"])
-		baselines = np.apply_along_axis(Util.find_baseline, 2, waves)
+
 		max_values = np.percentile(waves, 95, axis=2)#For robustness, we use the 95th percentile
 		min_values = np.percentile(waves, 5, axis=2)#For robustness, we use the 5th percentile
-		std_values = np.std(waves, axis=2)
-		is_hits = np.apply_along_axis(Util.determine_hit, 2, waves)
 		for ch in range(30):
-			self.events["ch{}_baseline".format(ch)] = baselines[:, ch]
 			self.events["ch{}_max".format(ch)] = max_values[:, ch]
 			self.events["ch{}_min".format(ch)] = min_values[:, ch]
-			self.events["ch{}_std".format(ch)] = std_values[:, ch]
+
+	def find_full_std(self):
+		waves = np.array(self.events["waves"])
+		full_std_values = np.std(waves, axis=2)
+		for ch in range(30):
+			self.events["ch{}_full_std".format(ch)] = full_std_values[:, ch]
+
+
+	def analyze_and_subtract_baselines(self):
+		waves = np.array(self.events["waves"])
+
+		#calculate the number of samples for the baseilne before the pulse. 
+		dt = 1.0/(40e6*256)*1e9 #time difference between samples in ns
+		baseline_samples = int(self.c["baseline_ns"]/dt)
+		baselines = np.apply_along_axis(Util.find_baseline, 2, waves, baseline_samples)
+		baseline_std_values = np.apply_along_axis(Util.find_baseline_std, 2, waves, baseline_samples)
+
+		for ch in range(30):
+			self.events["ch{}_baseline".format(ch)] = baselines[:, ch]
+			self.events["ch{}_baseline_std".format(ch)] = baseline_std_values[:, ch]
+
+		#subtract the baseline from the waveforms
+		self.events["waves"] = waves - baselines[:, :, np.newaxis]
+
+
+	#Rough Benchmark on Jinseo's cpu: 60 seconds to process 10000 events
+	#Populate everything except the peak times, which are event looped and much slower
+	def find_hit_chs(self):
+		waves = np.array(self.events["waves"])
+		is_hits = np.apply_along_axis(Util.determine_hit, 2, waves)
+		for ch in range(30):
 			self.events["ch{}_is_hit".format(ch)] = is_hits[:, ch]
-		#Populate max_ch, the channel with the maximum amplitude of |baseline - min| for each event
-		self.rqs["max_ch"] = np.argmax(np.abs(baselines - min_values), axis=1)
+
 
 	def reconstruct_peak_time(self, verbose = False):	
 		waves = np.array(self.events["waves"])
@@ -520,6 +546,7 @@ class Acdc:
 				#Print the number of non default peak times to check for errors
 				print("Number of events with non-default peak times for channel {:d}: {:d}".format(ch, success))
 			self.events["ch{}_peak_times".format(ch)] = peak_times_ch
+
 	def construct_wr_phi(self, verbose = False):
 		"""
 		Constructs the phase of the WR signal for each event.

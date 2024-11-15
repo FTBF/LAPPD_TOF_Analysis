@@ -416,32 +416,14 @@ class Acdc:
 		NUM_OCTANTS = 8
 		trigger_low_bound = (((self.events["sys_time"]+4)%NUM_OCTANTS)*OCTANT_LENGTH - (OCTANT_LENGTH/2))%BUFFER_LENGTH
 		
-		for i, ev in enumerate(self.events):
-			self.events[i]["waves"] = self.roll_rows_forward(np.copy(ev["waves"]), trigger_low_bound[i])
-
-	def roll_rows_forward(arr, trigger_low_bound):
-		"""
-		Roll each row of a 2D array forward by specified amounts in a vectorized way.
+		# Stack all waveforms into a single array
+		waves_array = np.stack(self.events["waves"])
 		
-		Parameters:
-		arr (numpy.ndarray): Input 2D array of shape (n_rows, n_cols)
-		trigger_low_bound (numpy.ndarray): 1D array of shape (n_rows,) specifying roll amount for each row
+		# Roll all waveforms at once
+		rolled_waves = np.roll(waves_array, -trigger_low_bound[:, np.newaxis], axis=2)
 		
-		Returns:
-		numpy.ndarray: Array with same shape as input, with rows rolled forward
-		"""
-		n_rows, n_cols = arr.shape
-		
-		# Create meshgrid for row and column indices
-		row_idx, col_idx = np.meshgrid(np.arange(n_rows), np.arange(n_cols), indexing='ij')
-		
-		# Subtract the roll amounts from column indices
-		new_col_idx = (col_idx - trigger_low_bound[:, np.newaxis]) % n_cols
-		
-		# Create the output array using advanced indexing
-		rolled_arr = arr[row_idx, new_col_idx]
-		
-		return rolled_arr
+		# Unstack the waves back to original format
+		self.events["waves"] = list(rolled_waves)
 
 	def reduce_data(self):
 
@@ -483,3 +465,4 @@ class Acdc:
 		for i, ev in enumerate(self.events):
 			#find the peak locations and amplitudes
 			#self.reconstruct_peaks(ev)
+			pass

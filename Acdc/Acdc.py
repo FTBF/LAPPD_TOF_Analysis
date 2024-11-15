@@ -407,6 +407,24 @@ class Acdc:
 			for key, str_type in self.rq_config["channel"].items():
 				self.rqs["ch{:d}_{}".format(ch, key)] = []
 
+	def roll_waveforms(self):
+		#Splits the ring buffer into octants and finds a lower bound for the octant that the trigger is in
+		BUFFER_LENGTH = 256
+		OCTANT_LENGTH = BUFFER_LENGTH/8 #number of samples in the octant
+		NUM_OCTANTS = 8
+		CLOCK_OFFSET = 4
+
+		#JOE: Please comment on each element of this calculation
+		trigger_low_bound = (((self.events["sys_time"]+CLOCK_OFFSET)%NUM_OCTANTS)*OCTANT_LENGTH - (OCTANT_LENGTH/2))%BUFFER_LENGTH
+		
+		# Stack all waveforms into a single array
+		waves_array = np.stack(self.events["waves"])
+		
+		# Roll all waveforms at once
+		rolled_waves = np.roll(waves_array, -trigger_low_bound[:, np.newaxis], axis=2)
+		
+		# Unstack the waves back to original format
+		self.events["waves"] = list(rolled_waves)
 
 	def reduce_data(self):
 
@@ -433,7 +451,7 @@ class Acdc:
 
 		#uses information on the trigger time to roll
 		#the buffer of the waveforms to be causal
-		#self.roll_waveforms()
+		self.roll_waveforms()
 
 		#analyze baselines, populate baseline values and STDs,
 		#and baseline subtract waveforms. Uses a coarse, vectorized
@@ -450,7 +468,7 @@ class Acdc:
 		#########event looped operations###############
 		for i, ev in enumerate(self.events):
 			#find the peak locations and amplitudes
-			#self.reconstruct_peaks(ev)]
+			#self.reconstruct_peaks(ev)
 			pass
 	###########################Analysis functions####################################
 	def calc_longitudinal_pos(self):
@@ -559,4 +577,3 @@ class Acdc:
 
 
 
-			

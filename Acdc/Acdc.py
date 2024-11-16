@@ -410,21 +410,20 @@ class Acdc:
 	def roll_waveforms(self):
 		#Splits the ring buffer into octants and finds a lower bound for the octant that the trigger is in
 		BUFFER_LENGTH = 256
-		OCTANT_LENGTH = BUFFER_LENGTH/8 #number of samples in the octant
+		OCTANT_LENGTH = BUFFER_LENGTH//8 #number of samples in the octant
 		NUM_OCTANTS = 8
 		CLOCK_OFFSET = 4
 
 		#JOE: Please comment on each element of this calculation
-		trigger_low_bound = (((self.events["sys_time"]+CLOCK_OFFSET)%NUM_OCTANTS)*OCTANT_LENGTH - (OCTANT_LENGTH/2))%BUFFER_LENGTH
+		trigger_low_bound = (((self.events["sys_time"]+CLOCK_OFFSET)%NUM_OCTANTS)*OCTANT_LENGTH - (OCTANT_LENGTH//2))%BUFFER_LENGTH
 		
-		# Stack all waveforms into a single array
-		waves_array = np.stack(self.events["waves"])
+		# Roll all waveforms
+		wave = np.array(self.events["waves"])
 		
-		# Roll all waveforms at once
-		rolled_waves = np.roll(waves_array, -trigger_low_bound[:, np.newaxis], axis=2)
-		
-		# Unstack the waves back to original format
-		self.events["waves"] = list(rolled_waves)
+		rolled_waves = [np.roll(wave[ev], -trigger_low_bound[ev], axis=1) for ev in range(len(trigger_low_bound))]
+
+		# Replace the old waveforms with the rolled waveforms
+		self.events["waves"] = np.array(rolled_waves)
 
 	def reduce_data(self):
 
@@ -466,8 +465,13 @@ class Acdc:
 		#find channels that seem to be hit by pulses that are reconstructable
 		self.find_hit_chs()
 
+		self.reconstruct_peak_time(verbose=True)
+
+		#For each event, mark the channel which is optimal for reconstructing the arrival time, by looking at their peak amplitudes.
+		self.identify_peak_channels(verbose=True)
+
 		#find the phase info on WR channels
-		#self.find_wr_phase()
+		self.construct_wr_phi(verbose=True)
 
 		#########event looped operations###############
 		for i, ev in enumerate(self.events):
@@ -501,8 +505,8 @@ class Acdc:
 		#calculate the number of samples for the baseilne before the pulse. 
 		dt = 1.0/(40e6*256)*1e9 #time difference between samples in ns
 		baseline_samples = int(self.c["baseline_ns"]/dt)
-		baselines = np.apply_along_axis(Util.find_baseline, 2, waves, baseline_samples)
-		baseline_std_values = np.apply_along_axis(Util.find_baseline_std, 2, waves, baseline_samples)
+		baselines = np.apply_along_axis(Util.find_baseline_simple, 2, waves, baseline_samples)
+		baseline_std_values = np.apply_along_axis(Util.find_baseline_std_simple, 2, waves, baseline_samples)
 
 		for ch in range(30):
 			self.events["ch{}_baseline".format(ch)] = baselines[:, ch]
@@ -515,16 +519,18 @@ class Acdc:
 	#Rough Benchmark on Jinseo's cpu: 60 seconds to process 10000 events
 	#Populate everything except the peak times, which are event looped and much slower
 	def find_hit_chs(self):
-		waves = np.array(self.events["waves"])
-		is_hits = np.apply_along_axis(Util.determine_hit, 2, waves)
 		for ch in range(30):
-			self.events["ch{}_is_hit".format(ch)] = is_hits[:, ch]
+			#A simple logic to determine if a channel is hit.
+			is_hits = np.abs(self.events["ch{}_min".format(ch)] / self.events["ch{}_baseline_std".format(ch)]) > self.c["hit_threshold"] #hit_threshold should typically be a number between 3 and 5.
+			self.events["ch{}_is_hit".format(ch)] = is_hits
 
 
 	def reconstruct_peak_time(self, verbose = False):	
+		"""
+		Reconstructs the peak time for each channel in each event.
+		"""
 		waves = np.array(self.events["waves"])
 		for ch in range(30):
-			baselines = self.events["ch{}_baseline".format(ch)]
 			min_values = self.events["ch{}_min".format(ch)]
 			start_caps = self.rqs["start_cap"]
 			peak_times_ch = []
@@ -535,41 +541,52 @@ class Acdc:
 				if (is_hit==1):
 					try:
 						success += 1
-						peak_times_ch.append(Util.find_peak_time(ydata = waves[ev, ch], y_baseline = baselines[ev], y_robust_min = min_values[ev], x_start_cap = start_caps[ev], timebase_ns= self.times[ch]))
+						peak_times_ch.append(Util.find_peak_time(ydata = waves[ev, ch], y_robust_min = min_values[ev], x_start_cap = start_caps[ev], timebase_ns= self.times[ch]))
 					except ValueError:
 						peak_times_ch.append([-1, -1])
 						self.rqs["error_codes"][ev].append(1109)#Arbitrary error code for peak time finding failure. Not used anywhere else in the code.
 				else:
-					peak_times_ch.append([-1, -1])
+					peak_times_ch.append([-1, -1])#We have to append something to keep the length of the array consistent with the number of events.
 			if verbose:
 				print("Populated peak times for channel {:d}".format(ch))
 				#Print the number of non default peak times to check for errors
 				print("Number of events with non-default peak times for channel {:d}: {:d}".format(ch, success))
 			self.events["ch{}_peak_times".format(ch)] = peak_times_ch
 
+	def identify_peak_channels(self, verbose = False):
+		"""
+		Identifies the channel with the maximum amplitude for each event, after reconstruction of the peak time.
+		"""
+		peak_ch = np.argmax(np.array([self.events["ch{}_min".format(ch)] for ch in range(30)]).T, axis = 1)
+		self.rqs["peak_ch"] = peak_ch
+		if verbose:
+			print("Populated peak_ch.")
+
 	def construct_wr_phi(self, verbose = False):
 		"""
 		Constructs the phase of the WR signal for each event.
-		Must be run after reconstruct_peak_time.
+		Must be run after identify_peak_channels.
 		"""
-		#First we determine the channels to be analyzed.
-		#If max_ch is populated, use that to find the channel with the max amplitude
+		#We assume that peak_ch has been populated. peak_ch must have exactly two peaks.
+		#First, we find the average peak time for each event, and also create a mask for events with exactly two peaks.
 		avg_peak_time = []
 		#Create masks for events with exactly two peaks, as we will only analyze these events.
 		two_peaks_mask = []
 		self.rqs["time_measured_ch"] = np.zeros(len(self.events["ch0_is_hit"]))
 		for ev in range(len(self.events["ch0_is_hit"])):#Peculiarly, the length of the is_hit arrays is not the number of events
-			if self.events["ch{}_is_hit".format(self.rqs["max_ch"][ev])][ev] == 1:
-				ch = self.rqs["max_ch"][ev]
+			if self.events["ch{}_is_hit".format(self.rqs["peak_ch"][ev])][ev] == 1:
+				ch = self.rqs["peak_ch"][ev]
 			else:
-				#Find the first channel with is_hit = 1
+				#If peak_ch is not populated or the corresponding channel is not hit (this is a weird situation), find the first channel with is_hit = 1
 				for ch in range(30):
 					if self.events["ch{}_is_hit".format(ch)][ev] == 1:
 						break
-				self.rqs["error_codes"][ev].append(1100)#Arbitrary error code for improper max_ch. Not used anywhere else in the code.
+				self.rqs["error_codes"][ev].append(1100)#Arbitrary error code for improper peak_ch. Not used anywhere else in the code.
 			self.rqs["time_measured_ch"][ev] = ch
 			avg_peak_time.append(np.mean(self.events["ch{}_peak_times".format(ch)][ev]))
 			two_peaks_mask.append(len(self.events["ch{}_peak_times".format(ch)][ev]) == 2)
+
+		##################################################################################################################################################
 
 		#Using Util.find_sine_phase to find the phase of the WR signal
 		#and populate the rqs with the results.

@@ -232,35 +232,21 @@ def find_baseline_simple(ydata, samples_before_pulse):
 
 def find_baseline_std_simple(ydata, samples_before_pulse):
 	return np.std(ydata[:samples_before_pulse])
-
-def determine_hit(ydata):
-	#Return 1 if the max of the waveform is particle hit, 0 otherwise.
-	robust_min = np.percentile(ydata, 5)
-	robust_max = np.percentile(ydata, 95)
-	baseline = find_baseline(ydata)
-	if 3*np.clip(robust_max - baseline, a_min = 0, a_max = None) < (baseline - robust_min): #Ratio is arbitrary. Ratio is 1 for a sine wave.
-		return 1
-	else:
-		return 0
 	
-	
-def find_peak_time(ydata, y_baseline, y_robust_min, x_start_cap, timebase_ns):
-	"""Finds the time of the peak of the waveform
-	
+def find_peak_time(ydata, y_robust_min, x_start_cap, timebase_ns):
+	"""Finds the time of the peak of the waveform.
 	Arguments:	
-		(ndarray)	ydata:		1 dimensional array representing the waveform
-		(float)		y_baseline:	peaks are found by comparing the waveform to this value
+		(ndarray)	ydata:		1 dimensional array representing the waveform, after rollover.
 		(float)		y_robust_min:peaks are found by comparing the waveform to this value
 		(int)		x_start_cap:index of ydata at which the waveform starts, i.e. most temporally advanced sample in the waveform
-		(ndarray)	timebase_ns:	the time distance (in nanoseconds) between i th and i+1 th sample in ydata. must have the same length as ydata
+		(ndarray)	timebase_ns:	the time distance (in nanoseconds) between i th and i+1 th sample in ydata. must have the same length as ydata, and has not been rolled, i.e. timebase_ns[0] corresponds to ydata[x_start_cap].
 	"""
-	ydata_rolled = np.roll(ydata, -x_start_cap) #In ydata, a peak may appear across the wraparound, rendering it disjoint. Hopefully all peaks are smooth in ydata_rolled.
-	timebase_rolled = np.roll(timebase_ns, -x_start_cap)
+	timebase_sum_rolled = np.cumsum(np.roll(timebase_ns, -x_start_cap))
 	#First, we find integer indices of the peaks. This is computationally cheap. After that, we will interpolate to find the peak time with 1 ps resolution.
-	peaks, props = find_peaks(ydata_rolled, height=0.8*(y_baseline-y_robust_min), width = 10, distance=20)#These numbers heavily depend on LAPPD characteristics and are subject to change.
+	peaks, props = find_peaks(ydata, height=0.8*(-y_robust_min), width = 10, distance=20)#These numbers heavily depend on LAPPD characteristics and are subject to change.
 	#peaks_cwt = find_peaks_cwt(vector = ydata_rolled, width = 10)#Alternative method.
 	
-	return [timebase_rolled[int(peak)] for peak in peaks]
+	return [timebase_sum_rolled[int(peak)] for peak in peaks]
 
 def find_sine_phase(ydata, timebase_ns, x_start_cap, x):
 		"""

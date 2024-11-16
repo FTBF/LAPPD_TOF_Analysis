@@ -24,7 +24,8 @@ global:
 #corrected channel number, not the original raw data chip channel
 channel:
   baseline: float #mV, baseline of the channel
-  std: float #mV, standard deviation of the baseline on the channel
+  baseline_std: float #mV, standard deviation of the baseline on the channel
+  full_std: float #mV, standard deviation of the full waveform
   max: float #mV, maximum amplitude of the channel
   min: float #mV, minimum amplitude of the channel
   is_hit: int #0 or 1, whether the channel has enough amplitude to consider for reconstruction

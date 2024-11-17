@@ -81,7 +81,7 @@ class WaveformPlotter:
             e = a.events[event_number]
 
         for ch, w in enumerate(e["waves"]):
-            ts = a.times[ch]
+            ts = np.cumsum(a.times[ch])
             ax.plot(ts, w + sep*ch, linewidth=1.5)
             ax.annotate(f"Strip {ch}", (ts[-1], w[-1] + sep*ch))
         

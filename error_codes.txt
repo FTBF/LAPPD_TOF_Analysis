@@ -2,3 +2,11 @@
 1: 
 2:
 3:
+
+# peak_ch identification errors
+7010: Improper peak_ch
+
+# Sync channel fit errors
+
+8010:  Fit value error
+8020:  Fit fail

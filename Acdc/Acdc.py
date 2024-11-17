@@ -585,7 +585,7 @@ class Acdc:
 				for ch in range(30):
 					if self.events["ch{}_is_hit".format(ch)][ev] == 1:
 						break
-				self.rqs["error_codes"][ev].append(1100)#Arbitrary error code for improper peak_ch. Not used anywhere else in the code.
+				self.rqs["error_codes"][ev].append(7010)#Arbitrary error code for improper peak_ch. Not used anywhere else in the code.
 			self.rqs["time_measured_ch"][ev] = int(ch)
 			avg_peak_time.append(np.mean(self.events["ch{}_peak_times".format(ch)][ev]))
 			two_peaks_mask.append(len(self.events["ch{}_peak_times".format(ch)][ev]) == 2)
@@ -614,12 +614,12 @@ class Acdc:
 					self.rqs["wr_Phi0"][ev] = popt[0]
 					self.rqs["wr_Amplitude"][ev] = popt[1]
 					self.rqs["wr_Offset"][ev] = popt[2]
-					
+
 					success += 1
 				except ValueError:
-					self.rqs["error_codes"][ev].append(1110)#Arbitrary error code for phase finding failure. Not used anywhere else in the code.
+					self.rqs["error_codes"][ev].append(8010)#Fit value error
 				except RuntimeError:
-					self.rqs["error_codes"][ev].append(1111)#Arbitrary error code for phase finding failure. Not used anywhere else in the code.
+					self.rqs["error_codes"][ev].append(8020)#Fit fail
 		if verbose:
 			print("Populated WR phi.")
 			#Print the number of non default peak times to check for errors

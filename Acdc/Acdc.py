@@ -69,6 +69,7 @@ class Acdc:
 		#data reduction is started. 
 		self.rq_confit = None
 		self.rqs = {} #the output of data reduction. 
+		self.rolled = False #a flag to indicate if the waveforms have been rolled.
 
 
 
@@ -409,14 +410,18 @@ class Acdc:
 
 	def roll_waveforms(self):
 		#Splits the ring buffer into octants and finds a lower bound for the octant that the trigger is in
+		if self.rolled:
+			print("Waveforms already rolled. Not rolling again.")
+			return
+		self.rolled = True
 		BUFFER_LENGTH = 256
 		OCTANT_LENGTH = BUFFER_LENGTH//8 #number of samples in the octant
 		NUM_OCTANTS = 8
-		CLOCK_OFFSET = 4
+		CLOCK_OFFSET = 0 #offset in clock cycles to account for the time it takes to process the trigger.
 
 		#JOE: Please comment on each element of this calculation
-		trigger_low_bound = (((self.events["sys_time"]+CLOCK_OFFSET)%NUM_OCTANTS)*OCTANT_LENGTH - (OCTANT_LENGTH//2))%BUFFER_LENGTH
-		
+		trigger_low_bound = (((self.events["sys_time"]+CLOCK_OFFSET)%NUM_OCTANTS)*OCTANT_LENGTH - (0))%BUFFER_LENGTH
+		self.rqs["start_cap"] = trigger_low_bound
 		# Roll all waveforms
 		wave = np.array(self.events["waves"])
 		
@@ -442,7 +447,6 @@ class Acdc:
 		wr_times = np.array(self.events["wr_time"])
 		self.rqs["pps"] = ((wr_times >> 32) & 0xffffffff) #the 1 Hz counter referencing 250 MHz WR ZEN
 		self.rqs["wr_time"] = (wr_times & 0xffffffff) #the 250 MHz counter from WR ZEN that resets every 1 second
-		self.rqs["start_cap"] = (((self.events["sys_time"]+2+2)%8)*32-16)%256 #the starting capacitor for the event. This is set by Joe Pastika's firmware.
 		self.rqs["error_codes"] = [[] for i in range(len(self.events["sys_time"]))] #a list of error codes for each event. sys_time is just an example column to get the length of the list.
 		#####event vectorized operations############
 
@@ -516,7 +520,6 @@ class Acdc:
 		self.events["waves"] = waves - baselines[:, :, np.newaxis]
 
 
-	#Rough Benchmark on Jinseo's cpu: 60 seconds to process 10000 events
 	#Populate everything except the peak times, which are event looped and much slower
 	def find_hit_chs(self):
 		for ch in range(30):
@@ -538,10 +541,11 @@ class Acdc:
 			#Apply peak finding to events whose is_hit is true and populate the peak info.
 			#This can be parallelized in the future as well.
 			for ev, is_hit in enumerate(self.events["ch{}_is_hit".format(ch)]):
-				if (is_hit==1):
+				if (is_hit):
 					try:
+						#The sign of waves is flipped because the peak finding function finds the peak of the negative of the waveform.
+						peak_times_ch.append(Util.find_peak_time(ydata = -waves[ev, ch], y_robust_min = min_values[ev], x_start_cap = start_caps[ev], timebase_ns= self.times[ch]))
 						success += 1
-						peak_times_ch.append(Util.find_peak_time(ydata = waves[ev, ch], y_robust_min = min_values[ev], x_start_cap = start_caps[ev], timebase_ns= self.times[ch]))
 					except ValueError:
 						peak_times_ch.append([-1, -1])
 						self.rqs["error_codes"][ev].append(1109)#Arbitrary error code for peak time finding failure. Not used anywhere else in the code.
@@ -557,7 +561,7 @@ class Acdc:
 		"""
 		Identifies the channel with the maximum amplitude for each event, after reconstruction of the peak time.
 		"""
-		peak_ch = np.argmax(np.array([self.events["ch{}_min".format(ch)] for ch in range(30)]).T, axis = 1)
+		peak_ch = np.argmin(np.array([self.events["ch{}_min".format(ch)] for ch in range(30)]), axis = 0)
 		self.rqs["peak_ch"] = peak_ch
 		if verbose:
 			print("Populated peak_ch.")
@@ -574,7 +578,7 @@ class Acdc:
 		two_peaks_mask = []
 		self.rqs["time_measured_ch"] = np.zeros(len(self.events["ch0_is_hit"]))
 		for ev in range(len(self.events["ch0_is_hit"])):#Peculiarly, the length of the is_hit arrays is not the number of events
-			if self.events["ch{}_is_hit".format(self.rqs["peak_ch"][ev])][ev] == 1:
+			if self.events["ch{}_is_hit".format(int(self.rqs["peak_ch"][ev]))][ev] == 1:
 				ch = self.rqs["peak_ch"][ev]
 			else:
 				#If peak_ch is not populated or the corresponding channel is not hit (this is a weird situation), find the first channel with is_hit = 1
@@ -582,7 +586,7 @@ class Acdc:
 					if self.events["ch{}_is_hit".format(ch)][ev] == 1:
 						break
 				self.rqs["error_codes"][ev].append(1100)#Arbitrary error code for improper peak_ch. Not used anywhere else in the code.
-			self.rqs["time_measured_ch"][ev] = ch
+			self.rqs["time_measured_ch"][ev] = int(ch)
 			avg_peak_time.append(np.mean(self.events["ch{}_peak_times".format(ch)][ev]))
 			two_peaks_mask.append(len(self.events["ch{}_peak_times".format(ch)][ev]) == 2)
 

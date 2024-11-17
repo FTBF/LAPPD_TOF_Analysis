@@ -226,12 +226,12 @@ def sin_const_back(x, A, omega, phi, B):
 def sin_const_back_250(x, A, phi, B):
 	return A*np.sin(2*np.pi*0.25*x-phi)+B
 
-#very simple, pre-pulse baseline calculator
-def find_baseline_simple(ydata, samples_before_pulse):
-	return np.mean(ydata[:samples_before_pulse])
+#very simple, post-pulse baseline calculator
+def find_baseline_simple(ydata, samples_before_end):
+	return np.median(ydata[-samples_before_end:])
 
-def find_baseline_std_simple(ydata, samples_before_pulse):
-	return np.std(ydata[:samples_before_pulse])
+def find_baseline_std_simple(ydata, samples_before_end):
+	return np.std(ydata[-samples_before_end:])
 	
 def find_peak_time(ydata, y_robust_min, x_start_cap, timebase_ns):
 	"""Finds the time of the peak of the waveform.

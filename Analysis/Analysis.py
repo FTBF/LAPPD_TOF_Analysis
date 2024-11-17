@@ -47,6 +47,7 @@ class Analysis:
 			
 			#reformat the times and data and pack into our data structure
 			temp = {}
+			temp["error_codes"] = []
 			temp["track_id"] = track_index
 			
 			temp["wr_seconds"] = wr_first_station_seconds[event_pairs[0]]
@@ -54,14 +55,19 @@ class Analysis:
 			temp["stations_acdc_id"] = [acdc1.c["acdc_id"], acdc2.c["acdc_id"]]
 			temp["stations_lappd_id"] = [acdc1.c["lappd_id"], acdc2.c["lappd_id"]]
 			temp["stations_z"] = [acdc1.c["zpos"], acdc2.c["zpos"]]
-			temp["stations_x"] = [acdc1.c["corner_offset"][0], acdc2.c["corner_offset"][0]]
-			temp["stations_y"] = [acdc1.c["corner_offset"][1], acdc2.c["corner_offset"][1]]
-			temp["stations_orientation"] = ["Id", "Id"] #placeholder for now
+			# temp["stations_x"] = [acdc1.c["corner_offset"][0], acdc2.c["corner_offset"][0]]
+			# temp["stations_y"] = [acdc1.c["corner_offset"][1], acdc2.c["corner_offset"][1]]
+			# temp["stations_orientation"] = ["Id", "Id"] #placeholder for now
 
-			temp["polar_angle_phi"], temp["polar_angle_theta"] = self.construct_particle_direction(acdc1, acdc2, event_pairs) 
+			# temp["polar_angle_phi"], temp["polar_angle_theta"] = self.construct_particle_direction(acdc1, acdc2, event_pairs) 
 
 			#time of flight calculation, mod 4 nanoseconds.
-			temp["time_of_flight_ns"] = [np.remainder(acdc2.events["wr_phi"][event_pairs[1]] - acdc1.events["wr_phi"][event_pairs[0]], 2*np.pi)  * 4 / (2*np.pi)] #nanoseconds, 4 ns per cycle
+			#Only if both wr_phi are nonzeros.
+			if acdc1.rqs["wr_phi"][event_pairs[0]] == 0 or acdc2.rqs["wr_phi"][event_pairs[1]] == 0:
+				temp["error_codes"].append(1)#Arbitrary error code for now.
+			if len(acdc1.rqs["error_codes"][event_pairs[0]]) != 0 or len(acdc2.rqs["error_codes"][event_pairs[1]]) != 0:
+				temp["error_codes"].append(2)#Arbitrary error code for now.
+			temp["time_of_flight_ns"] = [np.remainder(acdc2.rqs["wr_phi"][event_pairs[1]] - acdc1.rqs["wr_phi"][event_pairs[0]], 2*np.pi)  * 4 / (2*np.pi)] #nanoseconds, 4 ns per cycle
 
 			temp["filenames"] = [acdc1.events["filename"][event_pairs[0]], acdc2.events["filename"][event_pairs[1]]]
 			temp["file_timestamps"] = [acdc1.events["file_timestamp"][event_pairs[0]], acdc2.events["file_timestamp"][event_pairs[1]]]
@@ -90,20 +96,36 @@ class Analysis:
 		#Output the list of pairs of indexes of events that are within the WR_COUNT_TOLERANCE of each other.
 		WR_COUNT_TOLERANCE = 1e-8 #10 ns
 		coincidences = []
+		seconds_histogram = []
 		acdc1_wr_seconds = self.convert_wr_counter_in_seconds(acdc1)
 		acdc2_wr_seconds = self.convert_wr_counter_in_seconds(acdc2)
 		#First, we use the assumption that the second list is displaced from the first list by a constant integer. Our initial guess is the difference of medians.
-		median_diff_int_seconds = round(np.median(acdc2_wr_seconds) - np.median(acdc1_wr_seconds))
+		guess_diff_int_seconds = np.median(acdc2_wr_seconds) - np.median(acdc1_wr_seconds)
+		guess_range = range(int(guess_diff_int_seconds)-2, int(guess_diff_int_seconds)+2)
+		for guess in guess_range:
+			arr = self.align_arrays(acdc1_wr_seconds, acdc2_wr_seconds - guess, WR_COUNT_TOLERANCE)
+			coincidences.append(arr)
+			seconds_histogram.append([len(arr)])
+		#We choose the guess that has the most coincidences.
+		median_diff_int_seconds = guess_range[np.argmax(seconds_histogram)]
+
+		print("construct_coincidence found", np.max(seconds_histogram), "coincidences.")
+		return coincidences[np.argmax(seconds_histogram)], median_diff_int_seconds
+	
+	def align_arrays(self, array1, array2, tolerance):
+		#This function aligns the two arrays in time. It assumes that the second array is displaced from the first array by a constant integer. The function returns the integer.
+		#The function also returns the number of events that are within the tolerance of each other.
+		coincidences = []
 		j2 = 0 #Dynamic programming to speed up the search
-		for i in range(len(acdc1_wr_seconds)):
-			for j in range(j2, len(acdc2_wr_seconds)):
-				if abs(acdc2_wr_seconds[j] - acdc1_wr_seconds[i]-median_diff_int_seconds) < WR_COUNT_TOLERANCE:
-					coincidences.append((i,j, acdc2_wr_seconds[j] - acdc1_wr_seconds[i]-median_diff_int_seconds))
-				elif acdc2_wr_seconds[j] - acdc1_wr_seconds[i]-median_diff_int_seconds > WR_COUNT_TOLERANCE:
+		for i in range(len(array1)):
+			for j in range(j2, len(array2)):
+				if abs(array2[j] - array1[i]) < tolerance:
+					coincidences.append((i,j))
+				elif array2[j] - array1[i] > tolerance:
 					j2 = j
 					break
-		print("construct_coincidence found", len(coincidences), "coincidences.")
-		return coincidences, median_diff_int_seconds
+		return coincidences
+
 
 	def initialize_rqs(self):
 		#the output data structure contains many reduced

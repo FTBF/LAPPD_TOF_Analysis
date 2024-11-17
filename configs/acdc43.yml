@@ -21,6 +21,9 @@ strip_pitch: 6.6 #mm
 rq_file: "../configs/reduced_quantities.yml" #path to reduced quantities file
 baseline_ns: 10 #number of nanoseconds at the end of the waveform after the pulse for calculating baseline
 hit_threshold: 5 #unitless, (peak_height/baseline_uncertainty) for a channel to be considered a hit
+sine_fit_exclusion_samples_before_end: 20 #number of samples before the end of the waveform to exclude from the sine fit
+sine_fit_exclusion_samples_after_zero: 100 #number of samples after the zero of the waveform to exclude from the sine fit
+clock_offset: 4 #number of octants to shift the waveform to align with the clock
 
 #reduction/processing switch cases
 MAX_PROCESSES: 1

@@ -223,8 +223,8 @@ def sin_const_back(x, A, omega, phi, B):
 	return A*np.sin(omega*x-phi)+B
 
 @numba.jit(nopython=True)
-def sin_const_back_250(x, A, phi, B):
-	return A*np.sin(2*np.pi*0.25*x-phi)+B
+def sin_const_back_250(x, phi, A, B):
+	return A*np.sin(2*np.pi*0.25*x+phi)+B
 
 #very simple, post-pulse baseline calculator
 def find_baseline_simple(ydata, samples_before_end):
@@ -232,6 +232,9 @@ def find_baseline_simple(ydata, samples_before_end):
 
 def find_baseline_std_simple(ydata, samples_before_end):
 	return np.std(ydata[-samples_before_end:])
+
+def roll_timebase(timebase_ns, x_start_cap):
+	return np.cumsum(np.roll(timebase_ns, 1-x_start_cap))
 	
 def find_peak_time(ydata, y_robust_min, x_start_cap, timebase_ns):
 	"""Finds the time of the peak of the waveform.
@@ -241,29 +244,39 @@ def find_peak_time(ydata, y_robust_min, x_start_cap, timebase_ns):
 		(int)		x_start_cap:index of ydata at which the waveform starts, i.e. most temporally advanced sample in the waveform
 		(ndarray)	timebase_ns:	the time distance (in nanoseconds) between i th and i+1 th sample in ydata. must have the same length as ydata, and has not been rolled, i.e. timebase_ns[0] corresponds to ydata[x_start_cap].
 	"""
-	timebase_sum_rolled = np.cumsum(np.roll(timebase_ns, -x_start_cap))
 	#First, we find integer indices of the peaks. This is computationally cheap. After that, we will interpolate to find the peak time with 1 ps resolution.
 	peaks, props = find_peaks(ydata, height=0.8*(-y_robust_min), width = 10, distance=20)#These numbers heavily depend on LAPPD characteristics and are subject to change.
 	#peaks_cwt = find_peaks_cwt(vector = ydata_rolled, width = 10)#Alternative method.
 	
-	return [timebase_sum_rolled[int(peak)] for peak in peaks]
+	return [roll_timebase(timebase_ns, x_start_cap)[int(peak)] for peak in peaks]
 
-def find_sine_phase(ydata, timebase_ns, x_start_cap, x):
+def find_sine_phase(ydata, timebase_ns, ydata_max, x_start_cap, samples_after_zero, samples_before_end):
 		"""
 		Finds the phase of a sine wave in the waveform.
 		x must refer to a point in the waveform that is not in the trigger region, AFTER the rollover.
+
+		Arguments:
+			(ndarray)	ydata:		1 dimensional array representing the waveform, after rollover.
+			(ndarray)	timebase_ns:	the time distance (in nanoseconds) between i th and i+1 th sample in ydata. must have the same length as ydata, and has not been rolled, i.e. timebase_ns[0] corresponds to ydata[x_start_cap].
+			(int)		x_start_cap:	index of ydata at which the waveform starts, i.e. most temporally advanced sample in the waveform
+			(float)		x:			the time of the waveform at which the phase is to be found.
+			(int)		samples_before_end:	number of samples to exclude before the end, to avoid the trigger region.
 		"""
 		#Sine wave frequency in gigahertz. Note that sin_const_back_250 must be adjusted if this is changed.
 		FREQ = 0.25
-
-
-		ydata_rolled = np.roll(ydata, -x_start_cap)
-		timebase_rolled = np.roll(timebase_ns, -x_start_cap)
+		rolled_timebase = roll_timebase(timebase_ns, x_start_cap)
 		#Fit the sine wave using curve_fit
-		p0 = [0.1, 0, 0.1]
-		popt, pcov = curve_fit(sin_const_back_250, timebase_rolled, ydata_rolled, p0=p0)
-	
-		return np.remainder(popt[2] + 2*np.pi*FREQ*x, 2*np.pi)
+		p0 = [0, ydata_max, 0]#Amplitude, phase, offset
+		param_scale = [np.pi, ydata_max , ydata_max*0.1]#Rough scale of the parameters, used to adjust the step size in the minimization routine.
+		single_cycle = int(1/FREQ / (25/256))
+		start_point = samples_after_zero + single_cycle
+		#The bounds are empirically set to be reasonable for LAPPD waveforms. In particular, the amplitude has to be positive. 
+		#The first fit is done over a single cycle of the waveform, to get a rough estimate of the parameters.
+		popt, pcov = curve_fit(sin_const_back_250, xdata = rolled_timebase[start_point:start_point+single_cycle], ydata = ydata[start_point:start_point+single_cycle], p0=p0, bounds=([-2*np.pi, ydata_max*0.5, -ydata_max*0.5], [2*np.pi, ydata_max*1.5, ydata_max*0.5]), x_scale = param_scale)
+
+		#The second fit is done with the amplitude and offset fixed to the value found in the first fit. This is done to improve the fit.
+		phi, pcov = curve_fit(lambda x, phi: sin_const_back_250(x, phi, popt[1], popt[2]), xdata = rolled_timebase[samples_after_zero:-samples_before_end], ydata = ydata[samples_after_zero:-samples_before_end], p0=popt[0], bounds=(-2*np.pi, 2*np.pi))
+		return [phi, popt[1], popt[2]]
 
 def calc_vpos(xv, yv, mu0):
 		p0 = [-0.25*yv.max(), 0.01, mu0, 0.8]

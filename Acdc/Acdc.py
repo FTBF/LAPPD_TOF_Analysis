@@ -417,7 +417,7 @@ class Acdc:
 		BUFFER_LENGTH = 256
 		OCTANT_LENGTH = BUFFER_LENGTH//8 #number of samples in the octant
 		NUM_OCTANTS = 8
-		CLOCK_OFFSET = 0 #offset in clock cycles to account for the time it takes to process the trigger.
+		CLOCK_OFFSET = self.c["clock_offset"] #offset in clock cycles to account for the time it takes to process the trigger.
 
 		#JOE: Please comment on each element of this calculation
 		trigger_low_bound = (((self.events["sys_time"]+CLOCK_OFFSET)%NUM_OCTANTS)*OCTANT_LENGTH - (0))%BUFFER_LENGTH
@@ -596,20 +596,34 @@ class Acdc:
 		#and populate the rqs with the results.
 		waves = np.array(self.events["waves"])
 		success = 0
+		self.rqs["wr_phi"] = np.zeros_like(waves[:, 0, 0])
+
+		#Fit details for debugging
+		self.rqs["wr_Phi0"] = np.zeros_like(waves[:, 0, 0])
+		self.rqs["wr_Amplitude"] = np.zeros_like(waves[:, 0, 0])
+		self.rqs["wr_Offset"] = np.zeros_like(waves[:, 0, 0])
+
 		for ev, is_particle in enumerate(two_peaks_mask):
 			if (is_particle):
 				try:
 					ch = int(self.rqs["time_measured_ch"][ev])
-					phi = Util.find_sine_phase(ydata = waves[ev, self.c["sync_ch"]], timebase_ns = self.times[ch], x_start_cap = self.rqs["start_cap"][ev], x = avg_peak_time[ev])
+					popt = Util.find_sine_phase(ydata = waves[ev, self.c["sync_ch"]], timebase_ns = self.times[ch], ydata_max = self.events["ch{}_max".format(self.c["sync_ch"])][ev], x_start_cap = self.rqs["start_cap"][ev], samples_after_zero = self.c["sine_fit_exclusion_samples_after_zero"],  samples_before_end = self.c["sine_fit_exclusion_samples_before_end"])
+					self.rqs["wr_phi"][ev] = popt[0] + avg_peak_time[ev]/4*2*np.pi #The phase of the WR signal is the phase of the sine wave at the time of the point between the two peaks.
+
+					#Fit details for debugging
+					self.rqs["wr_Phi0"][ev] = popt[0]
+					self.rqs["wr_Amplitude"][ev] = popt[1]
+					self.rqs["wr_Offset"][ev] = popt[2]
+					
 					success += 1
 				except ValueError:
-					phi = -1
 					self.rqs["error_codes"][ev].append(1110)#Arbitrary error code for phase finding failure. Not used anywhere else in the code.
+				except RuntimeError:
+					self.rqs["error_codes"][ev].append(1111)#Arbitrary error code for phase finding failure. Not used anywhere else in the code.
 		if verbose:
 			print("Populated WR phi.")
 			#Print the number of non default peak times to check for errors
 			print("Number of events with non-default WR phi: {:d}".format(success))
-		self.rqs["wr_phi"] = phi
 
 		
 

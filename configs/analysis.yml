@@ -1,0 +1,8 @@
+
+
+#waveform analysis quantities
+rq_file: "../configs/multistation_reduced_quantities.yml" #path to reduced quantities file
+#reduction/processing switch cases
+MAX_PROCESSES: 1
+QUIET: False # Toggles if it says what it's doing
+DEBUG: True 

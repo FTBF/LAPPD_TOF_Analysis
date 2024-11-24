@@ -11,6 +11,7 @@ from statsmodels.nonparametric.smoothers_lowess import lowess
 import os
 import pickle
 import Util
+import error_codes as ec
 
 global chan_rearrange 
 chan_rearrange = np.array([5,4,3,2,1,0,11,10,9,8,7,6,17,16,15,14,13,12,23,22,21,20,19,18,29,28,27,26,25,24])
@@ -548,7 +549,7 @@ class Acdc:
 						success += 1
 					except ValueError:
 						peak_times_ch.append([-1, -1])
-						self.rqs["error_codes"][ev].append(1109)#Arbitrary error code for peak time finding failure. Not used anywhere else in the code.
+						self.rqs["error_codes"][ev].append(ec.Station_Error.PEAK_FIND_FAIL)#Arbitrary error code for peak time finding failure. Not used anywhere else in the code.
 				else:
 					peak_times_ch.append([-1, -1])#We have to append something to keep the length of the array consistent with the number of events.
 			if verbose:
@@ -585,7 +586,7 @@ class Acdc:
 				for ch in range(30):
 					if self.events["ch{}_is_hit".format(ch)][ev] == 1:
 						break
-				self.rqs["error_codes"][ev].append(7010)#Arbitrary error code for improper peak_ch. Not used anywhere else in the code.
+				self.rqs["error_codes"][ev].append(ec.Station_Error.IMPROPER_PEAK_CH)#Arbitrary error code for improper peak_ch. Not used anywhere else in the code.
 			self.rqs["time_measured_ch"][ev] = int(ch)
 			avg_peak_time.append(np.mean(self.events["ch{}_peak_times".format(ch)][ev]))
 			two_peaks_mask.append(len(self.events["ch{}_peak_times".format(ch)][ev]) == 2)
@@ -617,9 +618,9 @@ class Acdc:
 
 					success += 1
 				except ValueError:
-					self.rqs["error_codes"][ev].append(8010)#Fit value error
+					self.rqs["error_codes"][ev].append(ec.Station_Error.SIN_FIT_VALUE_ERROR)#Fit value error
 				except RuntimeError:
-					self.rqs["error_codes"][ev].append(8020)#Fit fail
+					self.rqs["error_codes"][ev].append(ec.Station_Error.SIN_FIT_FAIL)#Fit fail
 		if verbose:
 			print("Populated WR phi.")
 			#Print the number of non default peak times to check for errors

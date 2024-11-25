@@ -547,7 +547,9 @@ class Acdc:
 						#The sign of waves is flipped because the peak finding function finds the peak of the negative of the waveform.
 						peak_times_ch.append(Util.find_peak_time(ydata = -waves[ev, ch], y_robust_min = min_values[ev], x_start_cap = start_caps[ev], timebase_ns= self.times[ch]))
 						success += 1
-					except ValueError:
+					except ValueError as e:
+						if(verbose):
+							print("Peak finding failed for event {:d} on channel {:d}, due to ValueError: {:s}".format(ev, ch, str(e)))
 						peak_times_ch.append([-1, -1])
 						self.rqs["error_codes"][ev].append(ec.Station_Error.PEAK_FIND_FAIL)#Arbitrary error code for peak time finding failure. Not used anywhere else in the code.
 				else:

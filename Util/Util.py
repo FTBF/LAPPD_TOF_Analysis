@@ -226,6 +226,13 @@ def sin_const_back(x, A, omega, phi, B):
 def sin_const_back_250(x, phi, A, B):
 	return A*np.sin(2*np.pi*0.25*x+phi)+B
 
+@numba.jit(nopython=True)
+def linear_gauss(x, x0, A, B):
+	SIGMA = 1 # in ns
+	SLOPE = 0.2 # in 1/ns
+
+	return A* (np.exp(-((x-x0)**2)/(2*SIGMA**2))+ SLOPE*(x-x0)) + B 
+
 #very simple, post-pulse baseline calculator
 def find_baseline_simple(ydata, samples_before_end):
 	return np.median(ydata[-samples_before_end:])
@@ -235,8 +242,8 @@ def find_baseline_std_simple(ydata, samples_before_end):
 
 def roll_timebase(timebase_ns, x_start_cap):
 	return np.cumsum(np.roll(timebase_ns, 1-x_start_cap))
-	
-def find_peak_time(ydata, y_robust_min, x_start_cap, timebase_ns):
+
+def find_peak_time_basic(ydata, y_robust_min, x_start_cap, timebase_ns):
 	"""Finds the time of the peak of the waveform.
 	Arguments:	
 		(ndarray)	ydata:		1 dimensional array representing the waveform, after rollover.
@@ -248,7 +255,29 @@ def find_peak_time(ydata, y_robust_min, x_start_cap, timebase_ns):
 	peaks, props = find_peaks(ydata, height=0.8*(-y_robust_min), width = 10, distance=20)#These numbers heavily depend on LAPPD characteristics and are subject to change.
 	#peaks_cwt = find_peaks_cwt(vector = ydata_rolled, width = 10)#Alternative method.
 	
-	return [roll_timebase(timebase_ns, x_start_cap)[int(peak)] for peak in peaks]
+	return [roll_timebase(timebase_ns, x_start_cap)[int(peak)] for peak in peaks], peaks
+	
+def find_peak_time(ydata, y_robust_min, x_start_cap, timebase_ns):
+	"""Finds the time of the peak of the waveform.
+	Arguments:	
+		(ndarray)	ydata:		1 dimensional array representing the waveform, after rollover.
+		(float)		y_robust_min:peaks are found by comparing the waveform to this value
+		(int)		x_start_cap:index of ydata at which the waveform starts, i.e. most temporally advanced sample in the waveform
+		(ndarray)	timebase_ns:	the time distance (in nanoseconds) between i th and i+1 th sample in ydata. must have the same length as ydata, and has not been rolled, i.e. timebase_ns[0] corresponds to ydata[x_start_cap].
+	"""
+	peaks, peaks_index = find_peak_time_basic(ydata, y_robust_min, x_start_cap, timebase_ns)
+	#Now we curve_fit to find the peak time with 1 ps resolution.
+	rolled_timebase = roll_timebase(timebase_ns, x_start_cap)
+	if(y_robust_min >0):
+		print("Warning: y_robust_min is positive. This is not expected for LAPPD waveforms.")
+	for i, peak in enumerate(peaks):
+		p0 = [peak, y_robust_min, 0]
+		param_scale = [25, np.abs(y_robust_min), 0.1*np.abs(y_robust_min)]
+		start_cap = np.max([0, peaks_index[i]-20])
+		end_cap = np.min([len(ydata), peaks_index[i]+20])
+		popt, pcov = curve_fit(linear_gauss, xdata = rolled_timebase[start_cap:end_cap], ydata = ydata[start_cap:end_cap], p0=p0, bounds=([peak-1, y_robust_min*1.1, y_robust_min*(0.1)], [peak+1, y_robust_min*0.6, -y_robust_min*0.1]), x_scale = param_scale)
+		peaks[i] = popt[0]
+	return peaks
 
 def find_sine_phase(ydata, timebase_ns, ydata_max, x_start_cap, samples_after_zero, samples_before_end):
 		"""

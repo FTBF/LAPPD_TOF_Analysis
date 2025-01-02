@@ -279,6 +279,108 @@ def find_peak_time(ydata, y_robust_min, x_start_cap, timebase_ns):
 		peaks[i] = popt[0]
 	return peaks
 
+def find_peak_time_inflection(ydata, y_robust_min, x_start_cap, timebase_ns, forward_samples = 30, threshold = 0.3):
+	"""Finds the time of the peak of the waveform.
+	Arguments:	
+		(ndarray)	ydata:		1 dimensional array representing the waveform, after rollover.
+		(float)		y_robust_min:peaks are found by comparing the waveform to this value
+		(int)		x_start_cap:index of ydata at which the waveform starts, i.e. most temporally advanced sample in the waveform
+		(ndarray)	timebase_ns:	the time distance (in nanoseconds) between i th and i+1 th sample in ydata. must have the same length as ydata, and has not been rolled, i.e. timebase_ns[0] corresponds to ydata[x_start_cap].
+		(int)		forward_samples:	number of samples to take before the peak to find the inflection point.
+		(float)		threshold:		maximum slope times the threshold is the slope of the waveform at the returned peak time.
+	"""
+	peaks, peaks_index = find_peak_time_basic(ydata, y_robust_min, x_start_cap, timebase_ns)
+
+	#Now we curve_fit to find the peak time with 1 ps resolution.
+	rolled_timebase = roll_timebase(timebase_ns, x_start_cap)
+
+	
+	if(y_robust_min >0):
+		print("Warning: y_robust_min is positive. This is not expected for LAPPD waveforms.")
+	for i, peak in enumerate(peaks):
+		#Take a fixed number of samples before the peak and spline represent them.
+		start_cap = np.max([0, peaks_index[i]-forward_samples])
+		end_cap = peaks_index[i]
+
+		#https://docs.scipy.org/doc/scipy/tutorial/interpolate/smoothing_splines.html#tutorial-interpolate-splxxx
+		#https://docs.scipy.org/doc/scipy/reference/generated/scipy.interpolate.UnivariateSpline.roots.html#scipy.interpolate.UnivariateSpline.roots
+		#For the smoothing parameter s, we are assuming that the standard deviation of ydata is 1 mV. This is a rough estimate.
+		spline_tuple = splrep(rolled_timebase[start_cap:end_cap], ydata[start_cap:end_cap], k=3, s=forward_samples)
+		bsplinePoly = PPoly.from_spline(spline_tuple).derivative()
+		#The derivative of the waveform is used to find the inflection point.
+
+		#Measure the greatest slope of the waveform. First take the derivative of the spline. Then find the maximum of the derivative.
+		#The maximum of the derivative is the inflection point.
+		inflection_points = bsplinePoly.derivative().roots()
+
+		#Now we find the inflection point with the greatest slope.
+		max_slope_point = inflection_points[np.argmax(np.abs(bsplinePoly(inflection_points)))]
+		max_slope = bsplinePoly(max_slope_point)
+
+		#Make sure that slope is sufficiently small at the beginning of the waveform.
+		if(max_slope*threshold < bsplinePoly(rolled_timebase[start_cap])):
+			raise ValueError("The slope of the waveform at the beginning of the window is too high. Try increasing the forward_samples parameter.")
+		else:
+			#Solve the spline at the threshold slope to find the impact time.
+			impact_time = bsplinePoly.solve(max_slope*threshold, extrapolate=False)[0]
+			peaks[i] = impact_time
+	return peaks
+
+def find_peak_time_10_90(ydata, y_robust_min, x_start_cap, timebase_ns, forward_samples = 20):
+	"""Finds the time of the peak of the waveform.
+	Arguments:	
+		(ndarray)	ydata:		1 dimensional array representing the waveform, after rollover.
+		(float)		y_robust_min:peaks are found by comparing the waveform to this value
+		(int)		x_start_cap:index of ydata at which the waveform starts, i.e. most temporally advanced sample in the waveform
+		(ndarray)	timebase_ns:	the time distance (in nanoseconds) between i th and i+1 th sample in ydata. must have the same length as ydata, and has not been rolled, i.e. timebase_ns[0] corresponds to ydata[x_start_cap].
+		(int)		forward_samples:	number of samples to take before the peak to find the 10% and 90% levels.
+	"""
+	peaks, peaks_index = find_peak_time_basic(ydata, y_robust_min, x_start_cap, timebase_ns)
+
+	#Now we curve_fit to find the peak time with 1 ps resolution.
+	rolled_timebase = roll_timebase(timebase_ns, x_start_cap)
+	if(y_robust_min >0):
+		print("Warning: y_robust_min is positive. This is not expected for LAPPD waveforms.")
+	for i, peak in enumerate(peaks):
+		#Take a fixed number of samples before the peak and spline represent them.
+		start_cap = np.max([0, peaks_index[i]-forward_samples])
+		end_cap = peaks_index[i]
+
+		#https://docs.scipy.org/doc/scipy/tutorial/interpolate/smoothing_splines.html#tutorial-interpolate-splxxx
+		#https://docs.scipy.org/doc/scipy/reference/generated/scipy.interpolate.UnivariateSpline.roots.html#scipy.interpolate.UnivariateSpline.roots
+		spline_tuple = splrep(rolled_timebase[start_cap:end_cap], ydata[start_cap:end_cap], k=3, s=forward_samples)
+		bsplinePoly = PPoly.from_spline(spline_tuple)
+
+		#Find the 10% and 90% of the peak amplitude.
+		#Note: We implemented 30% levels because the 10% level was too close to the noise floor.
+		peak_amplitude = bsplinePoly(rolled_timebase[end_cap])
+		peak_30 = peak_amplitude*0.3
+		peak_90 = peak_amplitude*0.9
+		#Find the time at which the waveform crosses the 10% and 90% levels.
+		print("peak30 solve:", bsplinePoly.solve(peak_30, extrapolate=False))
+		print("peak90 solve:", bsplinePoly.solve(peak_90, extrapolate=False))
+		peak_30_time = bsplinePoly.solve(peak_30, extrapolate=False)[0]
+		peak_90_time = bsplinePoly.solve(peak_90, extrapolate=False)[0]
+		#Draw a line between the 10% and 90% levels and find the intersection with the y=0 line.
+		#The intersection is the impact time.
+		impact_time = peak_30_time + (peak_90_time - peak_30_time) * peak_30 / (peak_30 - peak_90)
+		peaks[i] = impact_time
+	return peaks
+
+def constant_fraction_discriminator(ydata_local, timebase_ns, fraction, delay):
+	"""Finds the time of the peak of the waveform.
+	Arguments:	
+		(ndarray)	ydata:		1 dimensional array representing a part of the waveform.
+		(ndarray)	timebase_ns:	the time distance (in nanoseconds) between i th and i+1 th sample in ydata. must have the same length as ydata.
+		(float)		fraction:	the fraction of the peak amplitude at which the discriminator is to be set.
+		(float)		delay:		the delay in nanoseconds between the peak and the discriminator.
+	"""
+	#First smooth the waveform with a cubic spline.
+	spline_tuple = splrep(timebase_ns, ydata_local, k=3, s=10000)
+	bspline = BSpline(*spline_tuple)
+	#Take the negative of the waveform times the fraction and delay, to find the discriminator level.
+	#TODO Not implemented yet
+
 def find_sine_phase(ydata, timebase_ns, ydata_max, x_start_cap, samples_after_zero, samples_before_end):
 		"""
 		Finds the phase of a sine wave in the waveform.

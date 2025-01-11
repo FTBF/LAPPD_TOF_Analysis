@@ -551,17 +551,20 @@ class Acdc:
 						if(verbose):
 							print("Peak finding failed for event {:d} on channel {:d}, due to ValueError: {:s}".format(ev, ch, str(e)))
 						peak_times_ch.append([-1, -1])
-						self.rqs["error_codes"][ev].append(ec.Station_Error.PEAK_FIND_FAIL)
+						# TODO: This error is channel specific, so we should not populate the global error_codes which affects the entire event.
+						# self.rqs["error_codes"][ev].append(ec.Station_Error.PEAK_FIND_FAIL)
 					except IndexError as e:
 						if(verbose):
 							print("Peak finding failed for event {:d} on channel {:d}, due to IndexError: {:s}".format(ev, ch, str(e)))
 						peak_times_ch.append([-1, -1])
-						self.rqs["error_codes"][ev].append(ec.Station_Error.PEAK_FIND_FAIL)
+						# TODO: This error is channel specific, so we should not populate the global error_codes which affects the entire event.
+						# self.rqs["error_codes"][ev].append(ec.Station_Error.PEAK_FIND_FAIL)
 					except TypeError as e:
 						if(verbose):
 							print("Peak finding failed for event {:d} on channel {:d}, due to TypeError: {:s}".format(ev, ch, str(e)))
 						peak_times_ch.append([-1, -1])
-						self.rqs["error_codes"][ev].append(ec.Station_Error.PEAK_FIND_FAIL)
+						# TODO: This error is channel specific, so we should not populate the global error_codes which affects the entire event.
+						# self.rqs["error_codes"][ev].append(ec.Station_Error.PEAK_FIND_FAIL)
 				else:
 					peak_times_ch.append([-1, -1])#We have to append something to keep the length of the array consistent with the number of events.
 			if verbose:

@@ -1,7 +1,7 @@
 import numpy as np
 from scipy.optimize import curve_fit
 from scipy.interpolate import splrep, BSpline, CubicSpline, PPoly
-from scipy.signal import find_peaks, find_peaks_cwt
+from scipy.signal import find_peaks, find_peaks_cwt, correlate, correlation_lags
 from matplotlib import pyplot as plt
 from scipy.integrate import trapezoid
 import numba
@@ -279,7 +279,7 @@ def find_peak_time(ydata, y_robust_min, x_start_cap, timebase_ns):
 		peaks[i] = popt[0]
 	return peaks
 
-def find_peak_time_inflection(ydata, y_robust_min, x_start_cap, timebase_ns, forward_samples = 30, threshold = 0.3):
+def find_peak_time_inflection(ydata, y_robust_min, x_start_cap, timebase_ns, forward_samples = 30, threshold = 0.3, sample_distance = 0.01, trailing_edge_limit = 180):
 	"""Finds the time of the peak of the waveform.
 	Arguments:	
 		(ndarray)	ydata:		1 dimensional array representing the waveform, after rollover.
@@ -297,37 +297,99 @@ def find_peak_time_inflection(ydata, y_robust_min, x_start_cap, timebase_ns, for
 	
 	if(y_robust_min >0):
 		print("Warning: y_robust_min is positive. This is not expected for LAPPD waveforms.")
-	for i, peak in enumerate(peaks):
-		#Take a fixed number of samples before the peak and spline represent them.
-		start_cap = np.max([0, peaks_index[i]-forward_samples])
-		end_cap = peaks_index[i]
+	if(peaks.__len__() != 2):
+		raise ValueError("This function is only implemented for two peaks.")
+	#First peak corresponds to the leading edge. Second peak corresponds to the trailing edge.
+	# We find the inflection point of the leading edge, which is the impact point. Then, the impact point of the trailing edge is computed by autocorrelation.
+	impact_points = np.full(shape = 2,fill_value= -1.0)
+	################################################## Leading edge ##################################################
+	#Take a fixed number of samples before the peak and spline represent them.
+	start_cap = np.max([0, peaks_index[0]-forward_samples])
+	end_cap = peaks_index[0]
 
-		#https://docs.scipy.org/doc/scipy/tutorial/interpolate/smoothing_splines.html#tutorial-interpolate-splxxx
-		#https://docs.scipy.org/doc/scipy/reference/generated/scipy.interpolate.UnivariateSpline.roots.html#scipy.interpolate.UnivariateSpline.roots
-		#For the smoothing parameter s, we are assuming that the standard deviation of ydata is 1 mV. This is a rough estimate.
-		spline_tuple = splrep(rolled_timebase[start_cap:end_cap], ydata[start_cap:end_cap], k=3, s=forward_samples)
-		bsplinePoly = PPoly.from_spline(spline_tuple).derivative()
-		#The derivative of the waveform is used to find the inflection point.
+	#https://docs.scipy.org/doc/scipy/tutorial/interpolate/smoothing_splines.html#tutorial-interpolate-splxxx
+	#https://docs.scipy.org/doc/scipy/reference/generated/scipy.interpolate.UnivariateSpline.roots.html#scipy.interpolate.UnivariateSpline.roots
+	#For the smoothing parameter s, we are assuming that the standard deviation of ydata is 1 mV. This is a rough estimate.
+	spline_tuple = splrep(rolled_timebase[start_cap:end_cap], ydata[start_cap:end_cap], k=3, s=forward_samples)
+	
+	bsplinePoly = PPoly.from_spline(spline_tuple)
+	bsplinePolyPrime = bsplinePoly.derivative()
+	#The derivative of the waveform is used to find the inflection point.
 
-		#Measure the greatest slope of the waveform. First take the derivative of the spline. Then find the maximum of the derivative.
-		#The maximum of the derivative is the inflection point.
-		inflection_points = bsplinePoly.derivative().roots()
+	#Measure the greatest slope of the waveform. First take the derivative of the spline. Then find the maximum of the derivative.
+	#The maximum of the derivative is the inflection point.
+	inflection_points = bsplinePolyPrime.derivative().roots()
 
-		#Now we find the inflection point with the greatest slope.
-		max_slope_point = inflection_points[np.argmax(np.abs(bsplinePoly(inflection_points)))]
-		max_slope = bsplinePoly(max_slope_point)
+	#Now we find the inflection point with the greatest slope.
+	max_slope_point = inflection_points[np.argmax(bsplinePolyPrime(inflection_points))]
+	max_slope = bsplinePolyPrime(max_slope_point)
 
-		#Make sure that slope is sufficiently small at the beginning of the waveform.
-		if(max_slope*threshold < bsplinePoly(rolled_timebase[start_cap])):
-			raise ValueError("The slope of the waveform at the beginning of the window is too high. Try increasing the forward_samples parameter.")
-		else:
-			#Solve the spline at the threshold slope to find the impact time.
-			impact_time = bsplinePoly.solve(max_slope*threshold, extrapolate=False)[0]
-			peaks[i] = impact_time
-	return peaks
+	#Min slope point is one of the inflection points or the beginning of the waveform. We make sure that we don't identify the peak as the minimum slope point.
+	#There is a tricky math here because we want to find points where the absolute value of the slope is minimized.
+	min_slope_point = inflection_points[np.argmin(np.abs(bsplinePolyPrime(inflection_points)))]
+	min_slope = bsplinePolyPrime(min_slope_point)
+	if(abs(min_slope)>abs(bsplinePolyPrime(rolled_timebase[start_cap]))):
+		min_slope_point = rolled_timebase[start_cap]
+		min_slope = bsplinePolyPrime(rolled_timebase[start_cap])
+
+
+	#Make sure that slope is sufficiently small at the minimum slope point.
+	if(abs(max_slope)*threshold < abs(min_slope)):
+		raise ValueError("The slope of the waveform in the window is too high. Try increasing the forward_samples parameter.")
+	else:
+		#Solve the spline at the threshold slope to find the impact time.
+		impact_candidates = bsplinePolyPrime.solve(max_slope*threshold, extrapolate=False)
+		#Find the impact time between the minimum slope point and the maximum slope point.
+		impact_times_filtered = impact_candidates[(impact_candidates>min_slope_point) & (impact_candidates<max_slope_point)]
+		impact_points[0] = np.max(impact_times_filtered)
+		
+	################################################## End of Leading edge ##################################################
+	################################################## Trailing edge ##################################################
+
+	#Create autocorrelation function with sampling step = 10 ps and sampling window = [first impact point, first impact point + 6 ns]
+	#The sliding window is [first max slope point, first peak time], sampled at 10 ps from bsplinePoly.
+	sliding_window_samples = np.arange(impact_points[0], peaks[0], sample_distance)
+
+	#Take a wide window containing the leading edge and the trailing edge and spline represent them.
+
+	start_cap = 0
+	end_cap = trailing_edge_limit
+	#For the smoothing parameter s, we are assuming that the standard deviation of ydata is 1 mV. This is a rough estimate.
+	spline_tuple = splrep(rolled_timebase[start_cap:end_cap], ydata[start_cap:end_cap], k=3, s=forward_samples)
+	
+	bsplinePoly2 = PPoly.from_spline(spline_tuple)
+
+	#Sliding window
+	tmp  = np.apply_along_axis(bsplinePoly2, 0, sliding_window_samples)
+	#Reference window
+	tmp2 = np.apply_along_axis(bsplinePoly2, 0, np.arange(impact_points[0], rolled_timebase[end_cap], sample_distance))
+	#Be careful with the order of the arguments. The first argument is the reference waveform, and the second argument is the sliding waveform.
+	autocorr = correlate(tmp2, tmp)
+	autocorr_lags = correlation_lags(np.size(tmp2), np.size(tmp))
+
+	#Some debugging plots.
+	# plt.plot(autocorr_lags * sample_distance + impact_points[0], autocorr / np.max(autocorr) * 100)
+	# plt.plot(np.arange(impact_points[0], rolled_timebase[end_cap], sample_distance), tmp2)
+	# plt.show()
+
+	#Now derive a spline from the autocorrelation samples, and find the peak of the spline.
+	autocorr_spline_tuple = splrep(autocorr_lags, autocorr, k=3)
+	autocorr_bspline = PPoly.from_spline(autocorr_spline_tuple)
+	autocorr_dbspline = autocorr_bspline.derivative()
+	autocorr_extrema = autocorr_dbspline.solve(0, extrapolate=False)
+
+	#Candidates are the two extremas with the largest autocorrelation value.
+	candidates = autocorr_extrema[np.argsort(autocorr_bspline(autocorr_extrema))][-2:]
+	candidates.sort()
+	#Measure the distance between the leading extremum and the first impact point. From the distance, we can find the second impact point from the second extremum.
+	impact_points[1] = impact_points[0] + (candidates[1] - candidates[0])*sample_distance
+	################################################## End of Trailing edge ##################################################
+
+
+	return impact_points
 
 def find_peak_time_10_90(ydata, y_robust_min, x_start_cap, timebase_ns, forward_samples = 20):
-	"""Finds the time of the peak of the waveform.
+	"""Finds the time of the peak of the waveform. This function currently does not work: read todo comment below.
 	Arguments:	
 		(ndarray)	ydata:		1 dimensional array representing the waveform, after rollover.
 		(float)		y_robust_min:peaks are found by comparing the waveform to this value
@@ -352,7 +414,7 @@ def find_peak_time_10_90(ydata, y_robust_min, x_start_cap, timebase_ns, forward_
 		bsplinePoly = PPoly.from_spline(spline_tuple)
 
 		#Find the 10% and 90% of the peak amplitude.
-		#Note: We implemented 30% levels because the 10% level was too close to the noise floor.
+		#TODO: Note: We implemented 30% levels because the 10% level was too close to the noise floor.
 		peak_amplitude = bsplinePoly(rolled_timebase[end_cap])
 		peak_30 = peak_amplitude*0.3
 		peak_90 = peak_amplitude*0.9

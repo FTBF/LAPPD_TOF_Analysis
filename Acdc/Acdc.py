@@ -438,7 +438,7 @@ class Acdc:
 		self.events["waves"] = np.array(rolled_waves)
 
 		# Store copies of the timebase data for each event, as we will roll the timebase for each event.
-		self.times_rolled= [np.roll(self.times, -trigger_low_bound[ev], axis=1) for ev in range(len(trigger_low_bound))]
+		self.times_rolled= [np.cumsum(np.roll(self.times, 1-trigger_low_bound[ev], axis=1), axis = 1) for ev in range(len(trigger_low_bound))]
 
 	def reduce_data(self):
 
@@ -550,7 +550,7 @@ class Acdc:
 				if (is_hit):
 					try:
 						#The sign of waves is flipped because the peak finding function finds the peak of the negative of the waveform.
-						output = Util.find_peak_time_basic(ydata = -waves[ev, ch], y_robust_min = min_values[ev], timebase_ns= self.times_rolled[ev][ch])[0]
+						output = Util.find_peak_time_inflection(ydata = -waves[ev, ch], y_robust_min = min_values[ev], timebase_ns= self.times_rolled[ev][ch])[0]
 						success += 1
 					except ValueError as e:
 						if(verbose):
@@ -609,7 +609,7 @@ class Acdc:
 				self.rqs["error_codes"][ev].append(Errorcodes.Station_Error.IMPROPER_PEAK_CH)#Improper peak channel
 			self.rqs["time_measured_ch"][ev] = int(ch)
 			avg_peak_time.append(np.mean(self.events["ch{}_peak_times".format(ch)][ev]))
-			two_peaks_mask.append(len(self.events["ch{}_peak_times".format(ch)][ev]) == 2)
+			two_peaks_mask.append(np.size(self.events["ch{}_peak_times".format(ch)][ev]) == 2)
 
 		##################################################################################################################################################
 

@@ -342,7 +342,7 @@ class Acdc:
 			else:
 				print("Can't find the filepath for the calibration file: {}	".format(calib_file))
 				dt = 1.0/(40e6*256)*1e9
-				self.times = np.array([[i*dt for i in range(256)] for j in range(30)])
+				self.times = np.full((30, 256), dt)
 				return self.times
 		else:
 			print("No calibration file key in configuration file. Please create a key called 'calib_file_name' with the path to the calibration file.")
@@ -478,11 +478,6 @@ class Acdc:
 		#find the phase info on WR channels
 		self.construct_wr_phi(verbose=True)
 
-		#########event looped operations###############
-		for i, ev in enumerate(self.events):
-			#find the peak locations and amplitudes
-			#self.reconstruct_peaks(ev)
-			pass
 	###########################Analysis functions####################################
 	def calc_longitudinal_pos(self):
 		pass
@@ -545,7 +540,7 @@ class Acdc:
 				if (is_hit):
 					try:
 						#The sign of waves is flipped because the peak finding function finds the peak of the negative of the waveform.
-						peak_times_ch.append(Util.find_peak_time_inflection(ydata = -waves[ev, ch], y_robust_min = min_values[ev], x_start_cap = start_caps[ev], timebase_ns= self.times[ch]))
+						peak_times_ch.append(Util.find_peak_time_basic(ydata = -waves[ev, ch], y_robust_min = min_values[ev], x_start_cap = start_caps[ev], timebase_ns= self.times[ch]))
 						success += 1
 					except ValueError as e:
 						if(verbose):
@@ -636,6 +631,8 @@ class Acdc:
 					self.rqs["error_codes"][ev].append(ec.Station_Error.SIN_FIT_VALUE_ERROR)#Fit value error
 				except RuntimeError:
 					self.rqs["error_codes"][ev].append(ec.Station_Error.SIN_FIT_FAIL)#Fit fail
+			else:
+				self.rqs["error_codes"][ev].append(ec.Station_Error.NOT_TWO_PEAKS)#Not two peaks
 		if verbose:
 			print("Populated WR phi.")
 			#Print the number of non default peak times to check for errors

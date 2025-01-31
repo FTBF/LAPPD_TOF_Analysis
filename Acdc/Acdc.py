@@ -11,7 +11,7 @@ from statsmodels.nonparametric.smoothers_lowess import lowess
 import os
 import pickle
 import Util
-import error_codes as ec
+import Errorcodes
 
 global chan_rearrange 
 chan_rearrange = np.array([5,4,3,2,1,0,11,10,9,8,7,6,17,16,15,14,13,12,23,22,21,20,19,18,29,28,27,26,25,24])
@@ -60,6 +60,11 @@ class Acdc:
 		#we have a mapping that corrects the time base of waveforms. 
 		#indexed by channel
 		self.times = [] 
+
+		#For each event, we roll the timebase and store them as we roll waveforms.
+		#This results in more data than just saving the timebase offset for each event, but it is useful for sanity.
+		self.times_rolled = []
+
 		#a mapping of shape (30, 256, 4096) that converts the 4096 possible ADC values
 		# each capacitor can have to mV. Saving it here so that if it exists, its only loaded
 		#once. 
@@ -211,6 +216,8 @@ class Acdc:
 			#load the timebase data
 			print("Loading timebase data")
 			self.load_timebase_data()
+
+		
 
 
 		###############pedestal part first######################
@@ -420,7 +427,6 @@ class Acdc:
 		NUM_OCTANTS = 8
 		CLOCK_OFFSET = self.c["clock_offset"] #offset in clock cycles to account for the time it takes to process the trigger.
 
-		#JOE: Please comment on each element of this calculation
 		trigger_low_bound = (((self.events["sys_time"]+CLOCK_OFFSET)%NUM_OCTANTS)*OCTANT_LENGTH - (0))%BUFFER_LENGTH
 		self.rqs["start_cap"] = trigger_low_bound
 		# Roll all waveforms
@@ -430,6 +436,9 @@ class Acdc:
 
 		# Replace the old waveforms with the rolled waveforms
 		self.events["waves"] = np.array(rolled_waves)
+
+		# Store copies of the timebase data for each event, as we will roll the timebase for each event.
+		self.times_rolled= [np.roll(self.times, -trigger_low_bound[ev], axis=1) for ev in range(len(trigger_low_bound))]
 
 	def reduce_data(self):
 
@@ -537,31 +546,32 @@ class Acdc:
 			#Apply peak finding to events whose is_hit is true and populate the peak info.
 			#This can be parallelized in the future as well.
 			for ev, is_hit in enumerate(self.events["ch{}_is_hit".format(ch)]):
+				output = []
 				if (is_hit):
 					try:
 						#The sign of waves is flipped because the peak finding function finds the peak of the negative of the waveform.
-						peak_times_ch.append(Util.find_peak_time_basic(ydata = -waves[ev, ch], y_robust_min = min_values[ev], x_start_cap = start_caps[ev], timebase_ns= self.times[ch]))
+						output = Util.find_peak_time_basic(ydata = -waves[ev, ch], y_robust_min = min_values[ev], timebase_ns= self.times_rolled[ev][ch])[0]
 						success += 1
 					except ValueError as e:
 						if(verbose):
 							print("Peak finding failed for event {:d} on channel {:d}, due to ValueError: {:s}".format(ev, ch, str(e)))
-						peak_times_ch.append([-1, -1])
-						# TODO: This error is channel specific, so we should not populate the global error_codes which affects the entire event.
-						# self.rqs["error_codes"][ev].append(ec.Station_Error.PEAK_FIND_FAIL)
+						output = [-1]
+						# Do not put an error code here, as we don't want to throw this event based on a single channel.
 					except IndexError as e:
 						if(verbose):
 							print("Peak finding failed for event {:d} on channel {:d}, due to IndexError: {:s}".format(ev, ch, str(e)))
-						peak_times_ch.append([-1, -1])
-						# TODO: This error is channel specific, so we should not populate the global error_codes which affects the entire event.
-						# self.rqs["error_codes"][ev].append(ec.Station_Error.PEAK_FIND_FAIL)
+						output = [-1]
+						# Do not put an error code here, as we don't want to throw this event based on a single channel.
 					except TypeError as e:
 						if(verbose):
 							print("Peak finding failed for event {:d} on channel {:d}, due to TypeError: {:s}".format(ev, ch, str(e)))
-						peak_times_ch.append([-1, -1])
-						# TODO: This error is channel specific, so we should not populate the global error_codes which affects the entire event.
-						# self.rqs["error_codes"][ev].append(ec.Station_Error.PEAK_FIND_FAIL)
+						output = [-1]
+						# Do not put an error code here, as we don't want to throw this event based on a single channel.
 				else:
-					peak_times_ch.append([-1, -1])#We have to append something to keep the length of the array consistent with the number of events.
+					#We have to append something to keep the length of the array consistent with the number of events.
+					#We append -1 to indicate that the peak time was not found. Do not put an error code here, as we don't want to throw this event based on a single channel.
+					output = [-1]
+				peak_times_ch.append(output)
 			if verbose:
 				print("Populated peak times for channel {:d}".format(ch))
 				#Print the number of non default peak times to check for errors
@@ -596,7 +606,7 @@ class Acdc:
 				for ch in range(30):
 					if self.events["ch{}_is_hit".format(ch)][ev] == 1:
 						break
-				self.rqs["error_codes"][ev].append(ec.Station_Error.IMPROPER_PEAK_CH)#Arbitrary error code for improper peak_ch. Not used anywhere else in the code.
+				self.rqs["error_codes"][ev].append(Errorcodes.Station_Error.IMPROPER_PEAK_CH)#Improper peak channel
 			self.rqs["time_measured_ch"][ev] = int(ch)
 			avg_peak_time.append(np.mean(self.events["ch{}_peak_times".format(ch)][ev]))
 			two_peaks_mask.append(len(self.events["ch{}_peak_times".format(ch)][ev]) == 2)
@@ -618,7 +628,7 @@ class Acdc:
 			if (is_particle):
 				try:
 					ch = int(self.rqs["time_measured_ch"][ev])
-					popt = Util.find_sine_phase(ydata = waves[ev, self.c["sync_ch"]], timebase_ns = self.times[ch], ydata_max = self.events["ch{}_max".format(self.c["sync_ch"])][ev], x_start_cap = self.rqs["start_cap"][ev], samples_after_zero = self.c["sine_fit_exclusion_samples_after_zero"],  samples_before_end = self.c["sine_fit_exclusion_samples_before_end"])
+					popt = Util.find_sine_phase(ydata = waves[ev, self.c["sync_ch"]], timebase_ns = self.times_rolled[ev][ch], ydata_max = self.events["ch{}_max".format(self.c["sync_ch"])][ev], samples_after_zero = self.c["sine_fit_exclusion_samples_after_zero"],  samples_before_end = self.c["sine_fit_exclusion_samples_before_end"])
 					self.rqs["wr_phi"][ev] = popt[0] + avg_peak_time[ev]/4*2*np.pi #The phase of the WR signal is the phase of the sine wave at the time of the point between the two peaks.
 
 					#Fit details for debugging
@@ -628,11 +638,11 @@ class Acdc:
 
 					success += 1
 				except ValueError:
-					self.rqs["error_codes"][ev].append(ec.Station_Error.SIN_FIT_VALUE_ERROR)#Fit value error
+					self.rqs["error_codes"][ev].append(Errorcodes.Station_Error.SIN_FIT_VALUE_ERROR)#Fit value error
 				except RuntimeError:
-					self.rqs["error_codes"][ev].append(ec.Station_Error.SIN_FIT_FAIL)#Fit fail
+					self.rqs["error_codes"][ev].append(Errorcodes.Station_Error.SIN_FIT_FAIL)#Fit fail
 			else:
-				self.rqs["error_codes"][ev].append(ec.Station_Error.NOT_TWO_PEAKS)#Not two peaks
+				self.rqs["error_codes"][ev].append(Errorcodes.Station_Error.NOT_TWO_PEAKS)#The number of peaks identified in this event is not two.
 		if verbose:
 			print("Populated WR phi.")
 			#Print the number of non default peak times to check for errors

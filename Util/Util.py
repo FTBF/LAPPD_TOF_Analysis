@@ -243,31 +243,29 @@ def find_baseline_std_simple(ydata, samples_before_end):
 def roll_timebase(timebase_ns, x_start_cap):
 	return np.cumsum(np.roll(timebase_ns, 1-x_start_cap))
 
-def find_peak_time_basic(ydata, y_robust_min, x_start_cap, timebase_ns):
+def find_peak_time_basic(ydata, y_robust_min, timebase_ns):
 	"""Finds the time of the peak of the waveform.
 	Arguments:	
 		(ndarray)	ydata:		1 dimensional array representing the waveform, after rollover.
 		(float)		y_robust_min:peaks are found by comparing the waveform to this value
-		(int)		x_start_cap:index of ydata at which the waveform starts, i.e. most temporally advanced sample in the waveform
-		(ndarray)	timebase_ns:	the time distance (in nanoseconds) between i th and i+1 th sample in ydata. must have the same length as ydata, and has not been rolled, i.e. timebase_ns[0] corresponds to ydata[x_start_cap].
+		(ndarray)	timebase_ns:	the time distance (in nanoseconds) between i th and i+1 th sample in ydata. must have the same length as ydata, and has been rolled, i.e. timebase_ns[0] corresponds to ydata[x_start_cap].
 	"""
 	#First, we find integer indices of the peaks. This is computationally cheap. After that, we will interpolate to find the peak time with 1 ps resolution.
 	peaks, props = find_peaks(ydata, height=0.8*(-y_robust_min), width = 10, distance=20)#These numbers heavily depend on LAPPD characteristics and are subject to change.
 	#peaks_cwt = find_peaks_cwt(vector = ydata_rolled, width = 10)#Alternative method.
 	
-	return [roll_timebase(timebase_ns, x_start_cap)[int(peak)] for peak in peaks], peaks
+	return [timebase_ns[int(peak)] for peak in peaks], peaks
 	
-def find_peak_time(ydata, y_robust_min, x_start_cap, timebase_ns):
+	#Do not use this function. The output format is different from the other peak finding functions.
+def find_peak_time(ydata, y_robust_min, timebase_ns):
 	"""Finds the time of the peak of the waveform.
 	Arguments:	
 		(ndarray)	ydata:		1 dimensional array representing the waveform, after rollover.
 		(float)		y_robust_min:peaks are found by comparing the waveform to this value
-		(int)		x_start_cap:index of ydata at which the waveform starts, i.e. most temporally advanced sample in the waveform
-		(ndarray)	timebase_ns:	the time distance (in nanoseconds) between i th and i+1 th sample in ydata. must have the same length as ydata, and has not been rolled, i.e. timebase_ns[0] corresponds to ydata[x_start_cap].
+		(ndarray)	timebase_ns:	the time distance (in nanoseconds) between i th and i+1 th sample in ydata. must have the same length as ydata, and has been rolled, i.e. timebase_ns[0] corresponds to ydata[x_start_cap].
 	"""
-	peaks, peaks_index = find_peak_time_basic(ydata, y_robust_min, x_start_cap, timebase_ns)
+	peaks, peaks_index = find_peak_time_basic(ydata, y_robust_min, timebase_ns)
 	#Now we curve_fit to find the peak time with 1 ps resolution.
-	rolled_timebase = roll_timebase(timebase_ns, x_start_cap)
 	if(y_robust_min >0):
 		print("Warning: y_robust_min is positive. This is not expected for LAPPD waveforms.")
 	for i, peak in enumerate(peaks):
@@ -275,24 +273,20 @@ def find_peak_time(ydata, y_robust_min, x_start_cap, timebase_ns):
 		param_scale = [25, np.abs(y_robust_min), 0.1*np.abs(y_robust_min)]
 		start_cap = np.max([0, peaks_index[i]-20])
 		end_cap = np.min([len(ydata), peaks_index[i]+20])
-		popt, pcov = curve_fit(linear_gauss, xdata = rolled_timebase[start_cap:end_cap], ydata = ydata[start_cap:end_cap], p0=p0, bounds=([peak-1, y_robust_min*1.1, y_robust_min*(0.1)], [peak+1, y_robust_min*0.6, -y_robust_min*0.1]), x_scale = param_scale)
+		popt, pcov = curve_fit(linear_gauss, xdata = timebase_ns[start_cap:end_cap], ydata = ydata[start_cap:end_cap], p0=p0, bounds=([peak-1, y_robust_min*1.1, y_robust_min*(0.1)], [peak+1, y_robust_min*0.6, -y_robust_min*0.1]), x_scale = param_scale)
 		peaks[i] = popt[0]
 	return peaks
 
-def find_peak_time_inflection(ydata, y_robust_min, x_start_cap, timebase_ns, forward_samples = 30, threshold = 0.3, sample_distance = 0.01, trailing_edge_limit = 180):
+def find_peak_time_inflection(ydata, y_robust_min, timebase_ns, forward_samples = 30, threshold = 0.3, sample_distance = 0.01, trailing_edge_limit = 180):
 	"""Finds the time of the peak of the waveform.
 	Arguments:	
 		(ndarray)	ydata:		1 dimensional array representing the waveform, after rollover.
 		(float)		y_robust_min:peaks are found by comparing the waveform to this value
-		(int)		x_start_cap:index of ydata at which the waveform starts, i.e. most temporally advanced sample in the waveform
-		(ndarray)	timebase_ns:	the time distance (in nanoseconds) between i th and i+1 th sample in ydata. must have the same length as ydata, and has not been rolled, i.e. timebase_ns[0] corresponds to ydata[x_start_cap].
+		(ndarray)	timebase_ns:	the time distance (in nanoseconds) between i th and i+1 th sample in ydata. must have the same length as ydata, and has been rolled, i.e. timebase_ns[0] corresponds to ydata[x_start_cap].
 		(int)		forward_samples:	number of samples to take before the peak to find the inflection point.
 		(float)		threshold:		maximum slope times the threshold is the slope of the waveform at the returned peak time.
 	"""
-	peaks, peaks_index = find_peak_time_basic(ydata, y_robust_min, x_start_cap, timebase_ns)
-
-	#Now we curve_fit to find the peak time with 1 ps resolution.
-	rolled_timebase = roll_timebase(timebase_ns, x_start_cap)
+	peaks, peaks_index = find_peak_time_basic(ydata, y_robust_min, timebase_ns)
 
 	
 	if(y_robust_min >0):
@@ -310,7 +304,7 @@ def find_peak_time_inflection(ydata, y_robust_min, x_start_cap, timebase_ns, for
 	#https://docs.scipy.org/doc/scipy/tutorial/interpolate/smoothing_splines.html#tutorial-interpolate-splxxx
 	#https://docs.scipy.org/doc/scipy/reference/generated/scipy.interpolate.UnivariateSpline.roots.html#scipy.interpolate.UnivariateSpline.roots
 	#For the smoothing parameter s, we are assuming that the standard deviation of ydata is 1 mV. This is a rough estimate.
-	spline_tuple = splrep(rolled_timebase[start_cap:end_cap], ydata[start_cap:end_cap], k=3, s=forward_samples)
+	spline_tuple = splrep(timebase_ns[start_cap:end_cap], ydata[start_cap:end_cap], k=3, s=forward_samples)
 	
 	bsplinePoly = PPoly.from_spline(spline_tuple)
 	bsplinePolyPrime = bsplinePoly.derivative()
@@ -328,9 +322,9 @@ def find_peak_time_inflection(ydata, y_robust_min, x_start_cap, timebase_ns, for
 	#There is a tricky math here because we want to find points where the absolute value of the slope is minimized.
 	min_slope_point = inflection_points[np.argmin(np.abs(bsplinePolyPrime(inflection_points)))]
 	min_slope = bsplinePolyPrime(min_slope_point)
-	if(abs(min_slope)>abs(bsplinePolyPrime(rolled_timebase[start_cap]))):
-		min_slope_point = rolled_timebase[start_cap]
-		min_slope = bsplinePolyPrime(rolled_timebase[start_cap])
+	if(abs(min_slope)>abs(bsplinePolyPrime(timebase_ns[start_cap]))):
+		min_slope_point = timebase_ns[start_cap]
+		min_slope = bsplinePolyPrime(timebase_ns[start_cap])
 
 
 	#Make sure that slope is sufficiently small at the minimum slope point.
@@ -355,14 +349,14 @@ def find_peak_time_inflection(ydata, y_robust_min, x_start_cap, timebase_ns, for
 	start_cap = 0
 	end_cap = trailing_edge_limit
 	#For the smoothing parameter s, we are assuming that the standard deviation of ydata is 1 mV. This is a rough estimate.
-	spline_tuple = splrep(rolled_timebase[start_cap:end_cap], ydata[start_cap:end_cap], k=3, s=forward_samples)
+	spline_tuple = splrep(timebase_ns[start_cap:end_cap], ydata[start_cap:end_cap], k=3, s=forward_samples)
 	
 	bsplinePoly2 = PPoly.from_spline(spline_tuple)
 
 	#Sliding window
 	tmp  = np.apply_along_axis(bsplinePoly2, 0, sliding_window_samples)
 	#Reference window
-	tmp2 = np.apply_along_axis(bsplinePoly2, 0, np.arange(impact_points[0], rolled_timebase[end_cap], sample_distance))
+	tmp2 = np.apply_along_axis(bsplinePoly2, 0, np.arange(impact_points[0], timebase_ns[end_cap], sample_distance))
 	#Be careful with the order of the arguments. The first argument is the reference waveform, and the second argument is the sliding waveform.
 	autocorr = correlate(tmp2, tmp)
 	autocorr_lags = correlation_lags(np.size(tmp2), np.size(tmp))
@@ -386,21 +380,19 @@ def find_peak_time_inflection(ydata, y_robust_min, x_start_cap, timebase_ns, for
 	################################################## End of Trailing edge ##################################################
 
 
-	return impact_points
+	return impact_points, peaks
 
-def find_peak_time_10_90(ydata, y_robust_min, x_start_cap, timebase_ns, forward_samples = 20):
+#Do not use this function. It is not implemented.
+def find_peak_time_10_90(ydata, y_robust_min, timebase_ns, forward_samples = 20):
 	"""Finds the time of the peak of the waveform. This function currently does not work: read todo comment below.
 	Arguments:	
 		(ndarray)	ydata:		1 dimensional array representing the waveform, after rollover.
 		(float)		y_robust_min:peaks are found by comparing the waveform to this value
-		(int)		x_start_cap:index of ydata at which the waveform starts, i.e. most temporally advanced sample in the waveform
-		(ndarray)	timebase_ns:	the time distance (in nanoseconds) between i th and i+1 th sample in ydata. must have the same length as ydata, and has not been rolled, i.e. timebase_ns[0] corresponds to ydata[x_start_cap].
+		(ndarray)	timebase_ns:	the time distance (in nanoseconds) between i th and i+1 th sample in ydata. must have the same length as ydata, and has been rolled, i.e. timebase_ns[0] corresponds to ydata[x_start_cap].
 		(int)		forward_samples:	number of samples to take before the peak to find the 10% and 90% levels.
 	"""
-	peaks, peaks_index = find_peak_time_basic(ydata, y_robust_min, x_start_cap, timebase_ns)
+	peaks, peaks_index = find_peak_time_basic(ydata, y_robust_min, timebase_ns)
 
-	#Now we curve_fit to find the peak time with 1 ps resolution.
-	rolled_timebase = roll_timebase(timebase_ns, x_start_cap)
 	if(y_robust_min >0):
 		print("Warning: y_robust_min is positive. This is not expected for LAPPD waveforms.")
 	for i, peak in enumerate(peaks):
@@ -410,12 +402,12 @@ def find_peak_time_10_90(ydata, y_robust_min, x_start_cap, timebase_ns, forward_
 
 		#https://docs.scipy.org/doc/scipy/tutorial/interpolate/smoothing_splines.html#tutorial-interpolate-splxxx
 		#https://docs.scipy.org/doc/scipy/reference/generated/scipy.interpolate.UnivariateSpline.roots.html#scipy.interpolate.UnivariateSpline.roots
-		spline_tuple = splrep(rolled_timebase[start_cap:end_cap], ydata[start_cap:end_cap], k=3, s=forward_samples)
+		spline_tuple = splrep(timebase_ns[start_cap:end_cap], ydata[start_cap:end_cap], k=3, s=forward_samples)
 		bsplinePoly = PPoly.from_spline(spline_tuple)
 
 		#Find the 10% and 90% of the peak amplitude.
 		#TODO: Note: We implemented 30% levels because the 10% level was too close to the noise floor.
-		peak_amplitude = bsplinePoly(rolled_timebase[end_cap])
+		peak_amplitude = bsplinePoly(timebase_ns[end_cap])
 		peak_30 = peak_amplitude*0.3
 		peak_90 = peak_amplitude*0.9
 		#Find the time at which the waveform crosses the 10% and 90% levels.
@@ -443,21 +435,19 @@ def constant_fraction_discriminator(ydata_local, timebase_ns, fraction, delay):
 	#Take the negative of the waveform times the fraction and delay, to find the discriminator level.
 	#TODO Not implemented yet
 
-def find_sine_phase(ydata, timebase_ns, ydata_max, x_start_cap, samples_after_zero, samples_before_end):
+def find_sine_phase(ydata, timebase_ns, ydata_max, samples_after_zero, samples_before_end):
 		"""
 		Finds the phase of a sine wave in the waveform.
 		x must refer to a point in the waveform that is not in the trigger region, AFTER the rollover.
 
 		Arguments:
 			(ndarray)	ydata:		1 dimensional array representing the waveform, after rollover.
-			(ndarray)	timebase_ns:	the time distance (in nanoseconds) between i th and i+1 th sample in ydata. must have the same length as ydata, and has not been rolled, i.e. timebase_ns[0] corresponds to ydata[x_start_cap].
-			(int)		x_start_cap:	index of ydata at which the waveform starts, i.e. most temporally advanced sample in the waveform
+			(ndarray)	timebase_ns:	the time distance (in nanoseconds) between i th and i+1 th sample in ydata. must have the same length as ydata, and has been rolled, i.e. timebase_ns[0] corresponds to ydata[x_start_cap].
 			(float)		x:			the time of the waveform at which the phase is to be found.
 			(int)		samples_before_end:	number of samples to exclude before the end, to avoid the trigger region.
 		"""
 		#Sine wave frequency in gigahertz. Note that sin_const_back_250 must be adjusted if this is changed.
 		FREQ = 0.25
-		rolled_timebase = roll_timebase(timebase_ns, x_start_cap)
 		#Fit the sine wave using curve_fit
 		p0 = [0, ydata_max, 0]#Amplitude, phase, offset
 		param_scale = [np.pi, ydata_max , ydata_max*0.1]#Rough scale of the parameters, used to adjust the step size in the minimization routine.
@@ -465,10 +455,10 @@ def find_sine_phase(ydata, timebase_ns, ydata_max, x_start_cap, samples_after_ze
 		start_point = samples_after_zero + single_cycle
 		#The bounds are empirically set to be reasonable for LAPPD waveforms. In particular, the amplitude has to be positive. 
 		#The first fit is done over a single cycle of the waveform, to get a rough estimate of the parameters.
-		popt, pcov = curve_fit(sin_const_back_250, xdata = rolled_timebase[start_point:start_point+single_cycle], ydata = ydata[start_point:start_point+single_cycle], p0=p0, bounds=([-2*np.pi, ydata_max*0.5, -ydata_max*0.5], [2*np.pi, ydata_max*1.5, ydata_max*0.5]), x_scale = param_scale)
+		popt, pcov = curve_fit(sin_const_back_250, xdata = timebase_ns[start_point:start_point+single_cycle], ydata = ydata[start_point:start_point+single_cycle], p0=p0, bounds=([-2*np.pi, ydata_max*0.5, -ydata_max*0.5], [2*np.pi, ydata_max*1.5, ydata_max*0.5]), x_scale = param_scale)
 
 		#The second fit is done with the amplitude and offset fixed to the value found in the first fit. This is done to improve the fit.
-		phi, pcov = curve_fit(lambda x, phi: sin_const_back_250(x, phi, popt[1], popt[2]), xdata = rolled_timebase[samples_after_zero:-samples_before_end], ydata = ydata[samples_after_zero:-samples_before_end], p0=popt[0], bounds=(-2*np.pi, 2*np.pi))
+		phi, pcov = curve_fit(lambda x, phi: sin_const_back_250(x, phi, popt[1], popt[2]), xdata = timebase_ns[samples_after_zero:-samples_before_end], ydata = ydata[samples_after_zero:-samples_before_end], p0=popt[0], bounds=(-2*np.pi, 2*np.pi))
 		return [phi, popt[1], popt[2]]
 
 def calc_vpos(xv, yv, mu0):

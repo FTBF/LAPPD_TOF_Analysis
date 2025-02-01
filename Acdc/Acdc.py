@@ -495,8 +495,8 @@ class Acdc:
 	def find_minmax_of_channels(self):
 		waves = np.array(self.events["waves"])
 
-		max_values = np.percentile(waves, 95, axis=2)#For robustness, we use the 95th percentile
-		min_values = np.percentile(waves, 5, axis=2)#For robustness, we use the 5th percentile
+		max_values = np.percentile(waves, 98, axis=2)#For robustness, we use the 98th percentile
+		min_values = np.percentile(waves, 2, axis=2)#For robustness, we use the 2th percentile
 		for ch in range(30):
 			self.events["ch{}_max".format(ch)] = max_values[:, ch]
 			self.events["ch{}_min".format(ch)] = min_values[:, ch]
@@ -550,7 +550,7 @@ class Acdc:
 				if (is_hit):
 					try:
 						#The sign of waves is flipped because the peak finding function finds the peak of the negative of the waveform.
-						output = Util.find_peak_time_CFD(ydata = -waves[ev, ch], y_robust_min = min_values[ev], timebase_ns= self.times_rolled[ev][ch])[0]
+						output, peaks = Util.find_peak_time_CFD(ydata = -waves[ev, ch], y_robust_min = min_values[ev], timebase_ns= self.times_rolled[ev][ch])
 						success += 1
 					except ValueError as e:
 						if(verbose):
@@ -608,7 +608,8 @@ class Acdc:
 						break
 				self.rqs["error_codes"][ev].append(Errorcodes.Station_Error.IMPROPER_PEAK_CH)#Improper peak channel
 			self.rqs["time_measured_ch"][ev] = int(ch)
-			avg_peak_time.append(np.mean(self.events["ch{}_peak_times".format(ch)][ev]))
+			#avg_peak_time.append(np.mean(self.events["ch{}_peak_times".format(ch)][ev]))
+			avg_peak_time.append(self.events["ch{}_peak_times".format(ch)][ev][0])
 			two_peaks_mask.append(np.size(self.events["ch{}_peak_times".format(ch)][ev]) == 2)
 
 		##################################################################################################################################################

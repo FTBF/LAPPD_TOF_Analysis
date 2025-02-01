@@ -550,7 +550,7 @@ class Acdc:
 				if (is_hit):
 					try:
 						#The sign of waves is flipped because the peak finding function finds the peak of the negative of the waveform.
-						output = Util.find_peak_time_inflection(ydata = -waves[ev, ch], y_robust_min = min_values[ev], timebase_ns= self.times_rolled[ev][ch])[0]
+						output = Util.find_peak_time_CFD(ydata = -waves[ev, ch], y_robust_min = min_values[ev], timebase_ns= self.times_rolled[ev][ch])[0]
 						success += 1
 					except ValueError as e:
 						if(verbose):

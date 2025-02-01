@@ -246,7 +246,7 @@ def roll_timebase(timebase_ns, x_start_cap):
 def find_peak_time_basic(ydata, y_robust_min, timebase_ns):
 	"""Finds the time of the peak of the waveform.
 	Arguments:	
-		(ndarray)	ydata:		1 dimensional array representing the waveform, after rollover.
+		(ndarray)	ydata:		1 dimensional array representing the waveform, after rollover. Peaks must be positive.
 		(float)		y_robust_min:peaks are found by comparing the waveform to this value
 		(ndarray)	timebase_ns:	the time distance (in nanoseconds) between i th and i+1 th sample in ydata. must have the same length as ydata, and has been rolled, i.e. timebase_ns[0] corresponds to ydata[x_start_cap].
 	"""
@@ -260,7 +260,7 @@ def find_peak_time_basic(ydata, y_robust_min, timebase_ns):
 def find_peak_time(ydata, y_robust_min, timebase_ns):
 	"""Finds the time of the peak of the waveform.
 	Arguments:	
-		(ndarray)	ydata:		1 dimensional array representing the waveform, after rollover.
+		(ndarray)	ydata:		1 dimensional array representing the waveform, after rollover. Peaks must be positive.
 		(float)		y_robust_min:peaks are found by comparing the waveform to this value
 		(ndarray)	timebase_ns:	the time distance (in nanoseconds) between i th and i+1 th sample in ydata. must have the same length as ydata, and has been rolled, i.e. timebase_ns[0] corresponds to ydata[x_start_cap].
 	"""
@@ -280,7 +280,7 @@ def find_peak_time(ydata, y_robust_min, timebase_ns):
 def find_peak_time_inflection(ydata, y_robust_min, timebase_ns, forward_samples = 30, threshold = 0.3, sample_distance = 0.01, trailing_edge_limit = 180):
 	"""Finds the time of the peak of the waveform.
 	Arguments:	
-		(ndarray)	ydata:		1 dimensional array representing the waveform, after rollover.
+		(ndarray)	ydata:		1 dimensional array representing the waveform, after rollover. Peaks must be positive.
 		(float)		y_robust_min:peaks are found by comparing the waveform to this value
 		(ndarray)	timebase_ns:	the time distance (in nanoseconds) between i th and i+1 th sample in ydata. must have the same length as ydata, and has been rolled, i.e. timebase_ns[0] corresponds to ydata[x_start_cap].
 		(int)		forward_samples:	number of samples to take before the peak to find the inflection point.
@@ -340,9 +340,19 @@ def find_peak_time_inflection(ydata, y_robust_min, timebase_ns, forward_samples 
 	################################################## End of Leading edge ##################################################
 	################################################## Trailing edge ##################################################
 
+	impact_points[1] = trailing_edge_autocorrelation(impact_points[0], peaks, ydata, sample_distance, timebase_ns, forward_samples, trailing_edge_limit)
+	################################################## End of Trailing edge ##################################################
+
+
+	return impact_points, peaks
+
+
+def trailing_edge_autocorrelation(first_impact_point, peaks, ydata, sample_distance, timebase_ns, forward_samples, trailing_edge_limit):
+	################################################## Trailing edge ##################################################
+
 	#Create autocorrelation function with sampling step = 10 ps and sampling window = [first impact point, first impact point + 6 ns]
 	#The sliding window is [first max slope point, first peak time], sampled at 10 ps from bsplinePoly.
-	sliding_window_samples = np.arange(impact_points[0], peaks[0], sample_distance)
+	sliding_window_samples = np.arange(first_impact_point, peaks[0], sample_distance)
 
 	#Take a wide window containing the leading edge and the trailing edge and spline represent them.
 
@@ -356,7 +366,7 @@ def find_peak_time_inflection(ydata, y_robust_min, timebase_ns, forward_samples 
 	#Sliding window
 	tmp  = np.apply_along_axis(bsplinePoly2, 0, sliding_window_samples)
 	#Reference window
-	tmp2 = np.apply_along_axis(bsplinePoly2, 0, np.arange(impact_points[0], timebase_ns[end_cap], sample_distance))
+	tmp2 = np.apply_along_axis(bsplinePoly2, 0, np.arange(first_impact_point, timebase_ns[end_cap], sample_distance))
 	#Be careful with the order of the arguments. The first argument is the reference waveform, and the second argument is the sliding waveform.
 	autocorr = correlate(tmp2, tmp)
 	autocorr_lags = correlation_lags(np.size(tmp2), np.size(tmp))
@@ -376,17 +386,15 @@ def find_peak_time_inflection(ydata, y_robust_min, timebase_ns, forward_samples 
 	candidates = autocorr_extrema[np.argsort(autocorr_bspline(autocorr_extrema))][-2:]
 	candidates.sort()
 	#Measure the distance between the leading extremum and the first impact point. From the distance, we can find the second impact point from the second extremum.
-	impact_points[1] = impact_points[0] + (candidates[1] - candidates[0])*sample_distance
+	return first_impact_point + (candidates[1] - candidates[0])*sample_distance
 	################################################## End of Trailing edge ##################################################
 
-
-	return impact_points, peaks
 
 #Do not use this function. It is not implemented.
 def find_peak_time_10_90(ydata, y_robust_min, timebase_ns, forward_samples = 20):
 	"""Finds the time of the peak of the waveform. This function currently does not work: read todo comment below.
 	Arguments:	
-		(ndarray)	ydata:		1 dimensional array representing the waveform, after rollover.
+		(ndarray)	ydata:		1 dimensional array representing the waveform, after rollover. Peaks must be positive.
 		(float)		y_robust_min:peaks are found by comparing the waveform to this value
 		(ndarray)	timebase_ns:	the time distance (in nanoseconds) between i th and i+1 th sample in ydata. must have the same length as ydata, and has been rolled, i.e. timebase_ns[0] corresponds to ydata[x_start_cap].
 		(int)		forward_samples:	number of samples to take before the peak to find the 10% and 90% levels.
@@ -421,19 +429,62 @@ def find_peak_time_10_90(ydata, y_robust_min, timebase_ns, forward_samples = 20)
 		peaks[i] = impact_time
 	return peaks
 
-def constant_fraction_discriminator(ydata_local, timebase_ns, fraction, delay):
+def find_peak_time_CFD(ydata, y_robust_min, timebase_ns, forward_samples = 30, backward_samples = 30, threshold = 0.22, sample_distance = 0.01, trailing_edge_limit = 180):
 	"""Finds the time of the peak of the waveform.
 	Arguments:	
-		(ndarray)	ydata:		1 dimensional array representing a part of the waveform.
-		(ndarray)	timebase_ns:	the time distance (in nanoseconds) between i th and i+1 th sample in ydata. must have the same length as ydata.
-		(float)		fraction:	the fraction of the peak amplitude at which the discriminator is to be set.
-		(float)		delay:		the delay in nanoseconds between the peak and the discriminator.
+		(ndarray)	ydata:		1 dimensional array representing the waveform, after rollover. Peaks must be positive.
+		(float)		y_robust_min:peaks are found by comparing the waveform to this value
+		(ndarray)	timebase_ns:	the time distance (in nanoseconds) between i th and i+1 th sample in ydata. must have the same length as ydata, and has been rolled, i.e. timebase_ns[0] corresponds to ydata[x_start_cap].
+		(int)		forward_samples:	number of samples to take before the peak to find the inflection point.
+		(float)		threshold:		maximum slope times the threshold is the slope of the waveform at the returned peak time.
 	"""
-	#First smooth the waveform with a cubic spline.
-	spline_tuple = splrep(timebase_ns, ydata_local, k=3, s=10000)
-	bspline = BSpline(*spline_tuple)
-	#Take the negative of the waveform times the fraction and delay, to find the discriminator level.
-	#TODO Not implemented yet
+	peaks, peaks_index = find_peak_time_basic(ydata, y_robust_min, timebase_ns)
+
+	
+	if(y_robust_min >0):
+		print("Warning: y_robust_min is positive. This is not expected for LAPPD waveforms.")
+	if(peaks.__len__() != 2):
+		raise ValueError("This function is only implemented for two peaks.")
+	#First peak corresponds to the leading edge. Second peak corresponds to the trailing edge.
+	# We find the CFD point of the leading edge, which is the impact point. Then, the impact point of the trailing edge is computed by autocorrelation.
+	impact_points = np.full(shape = 2,fill_value= -1.0)
+	################################################## Leading edge ##################################################
+	#Take a fixed number of samples around the peak and spline represent them.
+	start_cap = np.max([0, peaks_index[0]-forward_samples])
+	end_cap = peaks_index[0] + backward_samples
+
+	#https://docs.scipy.org/doc/scipy/tutorial/interpolate/smoothing_splines.html#tutorial-interpolate-splxxx
+	#https://docs.scipy.org/doc/scipy/reference/generated/scipy.interpolate.UnivariateSpline.roots.html#scipy.interpolate.UnivariateSpline.roots
+	#For the smoothing parameter s, we are assuming that the standard deviation of ydata is 1 mV. This is a rough estimate.
+	spline_tuple = splrep(timebase_ns[start_cap:end_cap], ydata[start_cap:end_cap], k=3, s=forward_samples)
+	
+	bsplinePoly = PPoly.from_spline(spline_tuple)
+	#The derivative of the waveform is used to find the peak amplitude
+	peaks_from_derivation = bsplinePoly.derivative().roots()
+
+	#Now we find the inflection point with the greatest slope.
+	primary_peak_from_derivation = peaks_from_derivation[np.argmax(bsplinePoly(peaks_from_derivation))]
+	amplitude = bsplinePoly(primary_peak_from_derivation)
+	start_value = bsplinePoly(timebase_ns[start_cap])
+
+	#Make sure that value of the waveform is sufficiently small at the beginning of the window.
+	if(abs(amplitude)*threshold < abs(start_value)):
+		raise ValueError("The slope of the waveform in the window is too high. Try increasing the forward_samples parameter.")
+	else:
+		#Solve the spline at the threshold slope to find the impact time.
+		impact_candidates = bsplinePoly.solve(amplitude*threshold, extrapolate=False)
+		#Find the impact time between the minimum slope point and the maximum slope point.
+		impact_times_filtered = impact_candidates[(impact_candidates>timebase_ns[start_cap]) & (impact_candidates<timebase_ns[peaks_index[0]])]
+		impact_points[0] = np.max(impact_times_filtered)#If there are still multiple candidates, take the latest one. Beginning of the waveform could have unwanted ripples.
+		
+	################################################## End of Leading edge ##################################################
+	################################################## Trailing edge ##################################################
+
+	impact_points[1] = trailing_edge_autocorrelation(impact_points[0], peaks, ydata, sample_distance, timebase_ns, forward_samples, trailing_edge_limit)
+	################################################## End of Trailing edge ##################################################
+
+
+	return impact_points, peaks
 
 def find_sine_phase(ydata, timebase_ns, ydata_max, samples_after_zero, samples_before_end):
 		"""

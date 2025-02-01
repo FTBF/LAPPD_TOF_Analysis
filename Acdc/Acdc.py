@@ -500,14 +500,14 @@ class Acdc:
 		max_values = np.percentile(waves, 98, axis=2)#For robustness, we use the 98th percentile
 		min_values = np.percentile(waves, 2, axis=2)#For robustness, we use the 2th percentile
 		for ch in range(30):
-			self.events["ch{}_max".format(ch)] = max_values[:, ch]
-			self.events["ch{}_min".format(ch)] = min_values[:, ch]
+			self.rqs["ch{}_max".format(ch)] = max_values[:, ch]
+			self.rqs["ch{}_min".format(ch)] = min_values[:, ch]
 
 	def find_full_std(self):
 		waves = np.array(self.events["waves"])
 		full_std_values = np.std(waves, axis=2)
 		for ch in range(30):
-			self.events["ch{}_full_std".format(ch)] = full_std_values[:, ch]
+			self.rqs["ch{}_full_std".format(ch)] = full_std_values[:, ch]
 
 
 	def analyze_and_subtract_baselines(self):
@@ -520,8 +520,8 @@ class Acdc:
 		baseline_std_values = np.apply_along_axis(Util.find_baseline_std_simple, 2, waves, baseline_samples)
 
 		for ch in range(30):
-			self.events["ch{}_baseline".format(ch)] = baselines[:, ch]
-			self.events["ch{}_baseline_std".format(ch)] = baseline_std_values[:, ch]
+			self.rqs["ch{}_baseline".format(ch)] = baselines[:, ch]
+			self.rqs["ch{}_baseline_std".format(ch)] = baseline_std_values[:, ch]
 
 		#subtract the baseline from the waveforms
 		self.events["waves"] = waves - baselines[:, :, np.newaxis]
@@ -531,8 +531,8 @@ class Acdc:
 	def find_hit_chs(self):
 		for ch in range(30):
 			#A simple logic to determine if a channel is hit.
-			is_hits = np.abs(self.events["ch{}_min".format(ch)] / self.events["ch{}_baseline_std".format(ch)]) > self.c["hit_threshold"] #hit_threshold should typically be a number between 3 and 5.
-			self.events["ch{}_is_hit".format(ch)] = is_hits
+			is_hits = np.abs(self.rqs["ch{}_min".format(ch)] / self.rqs["ch{}_baseline_std".format(ch)]) > self.c["hit_threshold"] #hit_threshold should typically be a number between 3 and 5.
+			self.rqs["ch{}_is_hit".format(ch)] = is_hits
 
 
 	def reconstruct_peak_time(self, verbose = False):	
@@ -541,18 +541,20 @@ class Acdc:
 		"""
 		waves = np.array(self.events["waves"])
 		for ch in range(30):
-			min_values = self.events["ch{}_min".format(ch)]
+			min_values = self.rqs["ch{}_min".format(ch)]
 			start_caps = self.rqs["start_cap"]
 			peak_times_ch = []
+			amplitudes_ch = []
 			success = 0
 			#Apply peak finding to events whose is_hit is true and populate the peak info.
 			#This can be parallelized in the future as well.
-			for ev, is_hit in enumerate(self.events["ch{}_is_hit".format(ch)]):
+			for ev, is_hit in enumerate(self.rqs["ch{}_is_hit".format(ch)]):
 				output = []
+				amplitude = 0
 				if (is_hit):
 					try:
 						#The sign of waves is flipped because the peak finding function finds the peak of the negative of the waveform.
-						output, peaks = Util.find_peak_time_CFD(ydata = -waves[ev, ch], y_robust_min = min_values[ev], timebase_ns= self.times_rolled[ev][ch])
+						output, peaks, amplitude = Util.find_peak_time_CFD(ydata = -waves[ev, ch], y_robust_min = min_values[ev], timebase_ns= self.times_rolled[ev][ch])
 						success += 1
 					except ValueError as e:
 						if(verbose):
@@ -574,17 +576,19 @@ class Acdc:
 					#We append -1 to indicate that the peak time was not found. Do not put an error code here, as we don't want to throw this event based on a single channel.
 					output = [-1]
 				peak_times_ch.append(output)
+				amplitudes_ch.append(amplitude)
 			if verbose:
 				print("Populated peak times for channel {:d}".format(ch))
 				#Print the number of non default peak times to check for errors
 				print("Number of events with non-default peak times for channel {:d}: {:d}".format(ch, success))
-			self.events["ch{}_peak_times".format(ch)] = peak_times_ch
+			self.rqs["ch{}_peak_times".format(ch)] = peak_times_ch
+			self.rqs["ch{}_amplitudes".format(ch)] = amplitudes_ch
 
 	def identify_peak_channels(self, verbose = False):
 		"""
 		Identifies the channel with the maximum amplitude for each event, after reconstruction of the peak time.
 		"""
-		peak_ch = np.argmin(np.array([self.events["ch{}_min".format(ch)] for ch in range(30)]), axis = 0)
+		peak_ch = np.argmin(np.array([self.rqs["ch{}_min".format(ch)] for ch in range(30)]), axis = 0)
 		self.rqs["peak_ch"] = peak_ch
 		if verbose:
 			print("Populated peak_ch.")
@@ -596,13 +600,13 @@ class Acdc:
 		"""
 		hpos_list = []
 		vpos_list = []
-		for ev in range(len(self.events["ch0_is_hit"])):#Peculiarly, the length of the is_hit arrays is not the number of events
+		for ev in range(len(self.rqs["ch0_is_hit"])):#Peculiarly, the length of the is_hit arrays is not the number of events
 			ch =self.rqs["peak_ch"][ev]
 			vpos = -1
 			hpos = -1
 			try:
 				vpos = ch * self.c["strip_pitch"] #TODO: This is a temporary solution. We need to do a function fit for the transverse position.
-				hpos = ((self.events["ch{}_peak_times".format(ch)][ev][1] - self.events["ch{}_peak_times".format(ch)][ev][0])*self.c["vel"] - 2*self.c["strip_length_ns"])/2
+				hpos = ((self.rqs["ch{}_peak_times".format(ch)][ev][1] - self.rqs["ch{}_peak_times".format(ch)][ev][0])*self.c["vel"] - 2*self.c["strip_length_ns"])/2
 			except:
 				self.rqs["error_codes"][ev].append(Errorcodes.Station_Error.POS_RECON_FAIL)#Position reconstruction failed
 			hpos_list.append(hpos)
@@ -621,20 +625,20 @@ class Acdc:
 		avg_peak_time = []
 		#Create masks for events with exactly two peaks, as we will only analyze these events.
 		two_peaks_mask = []
-		self.rqs["time_measured_ch"] = np.zeros(len(self.events["ch0_is_hit"]))
-		for ev in range(len(self.events["ch0_is_hit"])):#Peculiarly, the length of the is_hit arrays is not the number of events
-			if self.events["ch{}_is_hit".format(int(self.rqs["peak_ch"][ev]))][ev] == 1:
+		self.rqs["time_measured_ch"] = np.zeros(len(self.rqs["ch0_is_hit"]))
+		for ev in range(len(self.rqs["ch0_is_hit"])):#Peculiarly, the length of the is_hit arrays is not the number of events
+			if self.rqs["ch{}_is_hit".format(int(self.rqs["peak_ch"][ev]))][ev] == 1:
 				ch = self.rqs["peak_ch"][ev]
 			else:
 				#If peak_ch is not populated or the corresponding channel is not hit (this is a weird situation), find the first channel with is_hit = 1
 				for ch in range(30):
-					if self.events["ch{}_is_hit".format(ch)][ev] == 1:
+					if self.rqs["ch{}_is_hit".format(ch)][ev] == 1:
 						break
 				self.rqs["error_codes"][ev].append(Errorcodes.Station_Error.IMPROPER_PEAK_CH)#Improper peak channel
 			self.rqs["time_measured_ch"][ev] = int(ch)
 			#avg_peak_time.append(np.mean(self.events["ch{}_peak_times".format(ch)][ev]))
-			avg_peak_time.append(self.events["ch{}_peak_times".format(ch)][ev][0])
-			two_peaks_mask.append(np.size(self.events["ch{}_peak_times".format(ch)][ev]) == 2)
+			avg_peak_time.append(self.rqs["ch{}_peak_times".format(ch)][ev][0])
+			two_peaks_mask.append(np.size(self.rqs["ch{}_peak_times".format(ch)][ev]) == 2)
 
 		##################################################################################################################################################
 
@@ -653,7 +657,7 @@ class Acdc:
 			if (is_particle):
 				try:
 					ch = int(self.rqs["time_measured_ch"][ev])
-					popt = Util.find_sine_phase(ydata = waves[ev, self.c["sync_ch"]], timebase_ns = self.times_rolled[ev][ch], ydata_max = self.events["ch{}_max".format(self.c["sync_ch"])][ev], samples_after_zero = self.c["sine_fit_exclusion_samples_after_zero"],  samples_before_end = self.c["sine_fit_exclusion_samples_before_end"])
+					popt = Util.find_sine_phase(ydata = waves[ev, self.c["sync_ch"]], timebase_ns = self.times_rolled[ev][ch], ydata_max = self.rqs["ch{}_max".format(self.c["sync_ch"])][ev], samples_after_zero = self.c["sine_fit_exclusion_samples_after_zero"],  samples_before_end = self.c["sine_fit_exclusion_samples_before_end"])
 					self.rqs["wr_phi"][ev] = popt[0] + avg_peak_time[ev]/4*2*np.pi #The phase of the WR signal is the phase of the sine wave at the time of the point between the two peaks.
 
 					#Fit details for debugging

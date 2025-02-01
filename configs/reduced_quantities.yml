@@ -23,10 +23,11 @@ global:
 #like "ch3_"+reduced_quantity_name. References the strip-number
 #corrected channel number, not the original raw data chip channel
 channel:
-  baseline: float #mV, baseline of the channel
-  baseline_std: float #mV, standard deviation of the baseline on the channel
+  baseline: float #mV, baseline of the waveform
+  baseline_std: float #mV, standard deviation of the baseline on the waveform
   full_std: float #mV, standard deviation of the full waveform
-  max: float #mV, maximum amplitude of the channel
-  min: float #mV, minimum amplitude of the channel
+  max: float #mV, maximum sample of the waveform
+  min: float #mV, minimum sample of the waveform
   is_hit: int #0 or 1, whether the channel has enough amplitude to consider for reconstruction
-  peak_times: array_float #only if is_hit, times in ns of the peaks in the channel
+  peak_times: array_float #only if is_hit, times in ns of the peaks in the waveform
+  amplitude: float #only if is_hit, amplitudes in mV of the primary peak in the waveform. This can be different from max/min after spline fit.

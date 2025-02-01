@@ -240,6 +240,12 @@ def find_baseline_simple(ydata, samples_before_end):
 def find_baseline_std_simple(ydata, samples_before_end):
 	return np.std(ydata[-samples_before_end:])
 
+def find_baseline(ydata, samples_from_beginning):
+	return np.median(ydata[:samples_from_beginning])
+
+def find_baseline_std(ydata, samples_from_beginning):
+	return np.std(ydata[:samples_from_beginning])
+
 def roll_timebase(timebase_ns, x_start_cap):
 	return np.cumsum(np.roll(timebase_ns, 1-x_start_cap))
 
@@ -254,7 +260,7 @@ def find_peak_time_basic(ydata, y_robust_min, timebase_ns):
 	peaks, props = find_peaks(ydata, height=0.8*(-y_robust_min), width = 10, distance=20)#These numbers heavily depend on LAPPD characteristics and are subject to change.
 	#peaks_cwt = find_peaks_cwt(vector = ydata_rolled, width = 10)#Alternative method.
 	
-	return [timebase_ns[int(peak)] for peak in peaks], peaks
+	return [timebase_ns[int(peak)] for peak in peaks], peaks, props["peak_heights"]
 	
 	#Do not use this function. The output format is different from the other peak finding functions.
 def find_peak_time(ydata, y_robust_min, timebase_ns):
@@ -429,7 +435,7 @@ def find_peak_time_10_90(ydata, y_robust_min, timebase_ns, forward_samples = 20)
 		peaks[i] = impact_time
 	return peaks
 
-def find_peak_time_CFD(ydata, y_robust_min, timebase_ns, forward_samples = 30, backward_samples = 30, threshold = 0.22, sample_distance = 0.01, trailing_edge_limit = 180):
+def find_peak_time_CFD(ydata, y_robust_min, timebase_ns, forward_samples = 25, backward_samples = 0, threshold = 0.22, forward_ns_effective_amplitude = 0, sample_distance = 0.01, trailing_edge_limit = 180):
 	"""Finds the time of the peak of the waveform.
 	Arguments:	
 		(ndarray)	ydata:		1 dimensional array representing the waveform, after rollover. Peaks must be positive.
@@ -438,7 +444,7 @@ def find_peak_time_CFD(ydata, y_robust_min, timebase_ns, forward_samples = 30, b
 		(int)		forward_samples:	number of samples to take before the peak to find the inflection point.
 		(float)		threshold:		maximum slope times the threshold is the slope of the waveform at the returned peak time.
 	"""
-	peaks, peaks_index = find_peak_time_basic(ydata, y_robust_min, timebase_ns)
+	peaks, peaks_index, peak_height = find_peak_time_basic(ydata, y_robust_min, timebase_ns)
 
 	
 	if(y_robust_min >0):
@@ -462,17 +468,20 @@ def find_peak_time_CFD(ydata, y_robust_min, timebase_ns, forward_samples = 30, b
 	#The derivative of the waveform is used to find the peak amplitude
 	peaks_from_derivation = bsplinePoly.derivative().roots()
 
-	#Now we find the inflection point with the greatest slope.
 	primary_peak_from_derivation = peaks_from_derivation[np.argmax(bsplinePoly(peaks_from_derivation))]
-	amplitude = bsplinePoly(primary_peak_from_derivation)
-	start_value = bsplinePoly(timebase_ns[start_cap])
+
+	#This amplitude is feed back to Acdc reduced quantities for analysis.
+	amplitude = bsplinePoly(primary_peak_from_derivation- forward_ns_effective_amplitude)
+
+	#The start_value serves as a local baseline for the CFD. It is the average of the first 5 samples of the waveform in the beginning of the window.
+	start_value = np.mean([bsplinePoly(timebase_ns[start_cap+i]) for i in range(5)])
 
 	#Make sure that value of the waveform is sufficiently small at the beginning of the window.
-	if(abs(amplitude)*threshold < abs(start_value)):
+	if(amplitude*threshold < start_value):
 		raise ValueError("The slope of the waveform in the window is too high. Try increasing the forward_samples parameter.")
 	else:
 		#Solve the spline at the threshold slope to find the impact time.
-		impact_candidates = bsplinePoly.solve(amplitude*threshold, extrapolate=False)
+		impact_candidates = bsplinePoly.solve(start_value+(amplitude - start_value)*threshold, extrapolate=False)
 		#Find the impact time between the minimum slope point and the maximum slope point.
 		impact_times_filtered = impact_candidates[(impact_candidates>timebase_ns[start_cap]) & (impact_candidates<timebase_ns[peaks_index[0]])]
 		impact_points[0] = np.max(impact_times_filtered)#If there are still multiple candidates, take the latest one. Beginning of the waveform could have unwanted ripples.
@@ -484,7 +493,7 @@ def find_peak_time_CFD(ydata, y_robust_min, timebase_ns, forward_samples = 30, b
 	################################################## End of Trailing edge ##################################################
 
 
-	return impact_points, peaks
+	return impact_points, peaks, amplitude
 
 def find_sine_phase(ydata, timebase_ns, ydata_max, samples_after_zero, samples_before_end):
 		"""

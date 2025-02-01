@@ -1,8 +1,8 @@
 
 #RQ that are gobal to each event, as opposed to on a channel-to-channel basis
 global:
-  hpos: float #horiz position
-  vpos: float #vertical position
+  hpos: float #horiz position of the event[mm]
+  vpos: float #vertical position of the event[mm]
   n_clusters: float #number of clusters (particles) in the event
   sys_time: int #320 MHz counter synchronous with 40 MHz sampling clock
   wr_time: int #250 MHz counter PLLd from 100 MHz output of WR ZEN

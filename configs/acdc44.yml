@@ -8,7 +8,7 @@ station_id: 0 #Presently used to identify the "b0" vs "b1" in filename tags that
 sync_ch: 0 #Channel where there is a sine wave input for synchronization, USES CORRECTED STRIP NUMBERING
 
 #calibration related info
-zpos: 0 #The z position of the LAPPD's cathode surface in mm (?). seems unused at the moment
+zpos: 6000 #The z position of the LAPPD's cathode surface in mm.
 corner_offset: [0, 0] #Distance that the corner of the LAPPD is from the beam axis. Shouldn't this be a reconstructed variable? 
 pedestal_file_name: '' #Tag identifier of the pedestal files, which should be in the same folder as the data files
 calib_file_name: '../../data/calibrations/acdc44.root' #path to calibration file name

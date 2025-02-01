@@ -47,6 +47,7 @@ class Analysis:
 			
 			#reformat the times and data and pack into our data structure
 			temp = {}
+			temp["event_ids"] = np.array(event_pairs)
 			temp["error_codes"] = []
 			temp["track_id"] = track_index
 			
@@ -73,6 +74,9 @@ class Analysis:
 			temp["file_timestamps"] = [acdc1.events["file_timestamp"][event_pairs[0]], acdc2.events["file_timestamp"][event_pairs[1]]]
 
 			temp["involved_evts"] = [event_pairs[0], event_pairs[1]]
+			phi, theta = self.construct_particle_direction(acdc1, acdc2, event_pairs)
+			temp["polar_angle_phi"] = phi
+			temp["polar_angle_theta"] = theta
 			temp_tracks.append(temp)
 
 			track_index += 1
@@ -83,8 +87,8 @@ class Analysis:
 	# Two station version of the particle direction algorithm. For more than two stations, linear regression must be implemented.
 	# If the stations are in different orientations, the algorithm must be modified to account for that.
 	def construct_particle_direction(self, acdc1, acdc2, event_pairs):
-		xy_hitpos1 = np.array([acdc1.c["corner_offset"][0]+acdc1.events["hpos"][event_pairs[0]], acdc1.c["corner_offset"][1]+acdc1.events["vpos"][event_pairs[0]]])
-		xy_hitpos2 = np.array([acdc2.c["corner_offset"][0]+acdc2.events["hpos"][event_pairs[1]], acdc2.c["corner_offset"][1]+acdc2.events["vpos"][event_pairs[1]]])
+		xy_hitpos1 = np.array([acdc1.c["corner_offset"][0]+acdc1.rqs["hpos"][event_pairs[0]], acdc1.c["corner_offset"][1]+acdc1.rqs["vpos"][event_pairs[0]]])
+		xy_hitpos2 = np.array([acdc2.c["corner_offset"][0]+acdc2.rqs["hpos"][event_pairs[1]], acdc2.c["corner_offset"][1]+acdc2.rqs["vpos"][event_pairs[1]]])
 		
 		#Basic polar angle calculation, assuming the stations are in the same orientation.
 		theta = np.arctan((acdc2.c["zpos"] - acdc1.c["zpos"])/(np.linalg.norm( xy_hitpos2 - xy_hitpos1)))

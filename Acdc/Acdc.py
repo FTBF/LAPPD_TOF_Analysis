@@ -484,6 +484,8 @@ class Acdc:
 		#For each event, mark the channel which is optimal for reconstructing the arrival time, by looking at their peak amplitudes.
 		self.identify_peak_channels(verbose=True)
 
+		self.reconstruct_position(verbose=True)
+
 		#find the phase info on WR channels
 		self.construct_wr_phi(verbose=True)
 
@@ -586,6 +588,28 @@ class Acdc:
 		self.rqs["peak_ch"] = peak_ch
 		if verbose:
 			print("Populated peak_ch.")
+
+	def reconstruct_position(self, verbose = False):
+		"""
+		Reconstructs the position of the particle for each event.
+		Must be run after identify_peak_channels.
+		"""
+		hpos_list = []
+		vpos_list = []
+		for ev in range(len(self.events["ch0_is_hit"])):#Peculiarly, the length of the is_hit arrays is not the number of events
+			ch =self.rqs["peak_ch"][ev]
+			vpos = -1
+			hpos = -1
+			try:
+				vpos = ch * self.c["strip_pitch"] #TODO: This is a temporary solution. We need to do a function fit for the transverse position.
+				hpos = ((self.events["ch{}_peak_times".format(ch)][ev][1] - self.events["ch{}_peak_times".format(ch)][ev][0])*self.c["vel"] - 2*self.c["strip_length_ns"])/2
+			except:
+				self.rqs["error_codes"][ev].append(Errorcodes.Station_Error.POS_RECON_FAIL)#Position reconstruction failed
+			hpos_list.append(hpos)
+			vpos_list.append(vpos)
+		self.rqs["hpos"] = hpos_list
+		self.rqs["vpos"] = vpos_list
+		
 
 	def construct_wr_phi(self, verbose = False):
 		"""

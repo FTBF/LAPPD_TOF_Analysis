@@ -23,12 +23,12 @@ def gauss_const_back(x, A, c, mu, B):
 	return A*np.exp(-c*(x-mu)**2) + B
 
 @numba.jit(nopython=True)
-def sin_const_back(x, A, omega, phi, B):
-	return A*np.sin(omega*x-phi)+B
+def zero_const(x):
+	return 0
 
 @numba.jit(nopython=True)
-def sin_const_back_250(x, phi, A, B):
-	return A*np.sin(2*np.pi*0.25*x+phi)+B
+def sin_const_back(x, phi, A, B, freq):
+	return A*np.sin(2*np.pi*freq*x+phi)+B
 
 @numba.jit(nopython=True)
 def linear_gauss(x, x0, A, B):
@@ -44,16 +44,76 @@ def find_baseline_simple(ydata, samples_before_end):
 def find_baseline_std_simple(ydata, samples_before_end):
 	return np.std(ydata[-samples_before_end:])
 
-def find_baseline(ydata, samples_from_beginning, sam):
+def find_baseline(ydata, y_robust_min, timebase_ns, trigger_region_last_sample, inflection_threshold = 0.1, initial_samples_skip = 1, fail_consecutive = 3):
+	"""
+	params:
+
+	ydata: the waveform
+	y_robust_min: robust minimum of the waveform
+	timebase_ns: timebase of the waveform
+	trigger_region_last_sample: the last sample of the trigger region
+	inflection_threshold: the threshold for the inflection point slope
+	initial_samples_skip: the number of samples to skip at the beginning of the waveform
+	"""
 
 	# 1. Find simple baseline first, as we want to idenfity peaks.
 	# 2. After identifying the first peak, take descent from it, forward in time, until the derivative is small enough.(Low pass filtering required in this step.)
-	# 3. Take as many samples, forward in time, while the standard deviation decreases. Stop once stdev increases.
+	# 3. If we have samples to the trigger region, we can use them to find the baseline. Otherwise, we don't return a baseline; we throw a warning.
+	
+	# 1.
+	output, peaks, heights = find_peak_time_basic(ydata, y_robust_min, timebase_ns)
+	if(peaks.__len__() == 0):
+		raise ValueError("No peaks found in the waveform. Precision baseline calculation is not possible.")
+	peak = int(peaks[0])
 
-	return np.median(ydata[:samples_from_beginning])
+	if(peak<trigger_region_last_sample):
+		raise ValueError("The first peak is before the trigger region. Precision baseline calculation is not possible.")
 
-def find_baseline_std(ydata, samples_from_beginning):
-	return np.std(ydata[:samples_from_beginning])
+	# 2.
+	# Take a all samples between the trigger region and the first peak, and then filter them.
+	# We will use the filtered samples for gradient descent.
+	xdata_slope = timebase_ns[trigger_region_last_sample:peak]
+	ydata_slope = ydata[trigger_region_last_sample:peak]
+
+	##################################################### Filtering #####################################################
+
+	# Spline rep. Evan told me not to use this, but I know it works.(???) We can swap it with a different filter if we want.
+	spline_tuple = splrep(xdata_slope, ydata_slope, k=3, s=30)
+	bsplinePoly = PPoly.from_spline(spline_tuple)
+	bsplinePolyPrime = bsplinePoly.derivative()
+	# For debugging, print the maximum residual of the spline.
+	print("Splrep Max Residual:"+str(np.max(np.abs(ydata_slope - bsplinePoly(xdata_slope))))+"where the data changes from "+str(ydata_slope[0])+" to "+str(ydata_slope[-1]))
+
+	###################################################### End of Filtering #####################################################
+
+	##################################################### Gradient Descent #####################################################
+
+	#Measure the greatest slope of the waveform. First take the derivative of the spline. Then find the maximum of the derivative.
+	#The maximum of the derivative is the inflection point.
+	inflection_points = bsplinePolyPrime.derivative().roots()
+
+	#Now we find the inflection point with the greatest slope.
+	max_slope_point = inflection_points[np.argmax(bsplinePolyPrime(inflection_points))]
+	max_slope = bsplinePolyPrime(max_slope_point)
+
+	#Min slope point is the beginning of the waveform.
+	min_slope_point = timebase_ns[trigger_region_last_sample+initial_samples_skip]
+	min_slope = bsplinePolyPrime(timebase_ns[trigger_region_last_sample+initial_samples_skip])
+
+
+	# 3.
+	#Make sure that slope is sufficiently small at the minimum slope point.
+	#Take all samples after the trigger region and before the rising edge of the first peak. 
+
+	i = initial_samples_skip
+	while (test_residual_square(timebase_ns[trigger_region_last_sample+i:trigger_region_last_sample+i+fail_consecutive], ydata[trigger_region_last_sample+i:trigger_region_last_sample+i+fail_consecutive], zero_const, [], (abs(max_slope)*inflection_threshold)**2)):
+		i += 1
+	
+	if(i - initial_samples_skip < fail_consecutive+3):
+		raise ValueError("There is not enough waveform between the trigger region and the first pulse. Precision baseline calculation is not possible.")
+
+	#The precision baseline is the average of the samples between the trigger region and the rising edge of the first peak.
+	return np.mean(ydata[trigger_region_last_sample+initial_samples_skip:trigger_region_last_sample+i-fail_consecutive]), np.std(ydata[trigger_region_last_sample+initial_samples_skip:trigger_region_last_sample+i-fail_consecutive])
 
 def roll_timebase(timebase_ns, x_start_cap):
 	return np.cumsum(np.roll(timebase_ns, 1-x_start_cap))
@@ -304,7 +364,21 @@ def find_peak_time_CFD(ydata, y_robust_min, timebase_ns, forward_samples = 25, b
 
 	return impact_points, peaks, amplitude
 
-def find_sine_phase(ydata, timebase_ns, ydata_max, samples_after_zero, samples_before_end):
+#Helper function for find_sine_phase
+def test_residual_square(xsamples, ysamples, func, popt, threshold):
+	"""Calculates the square of the residual of the function at the samples.
+	Arguments:
+		(ndarray)	xsamples:	1 dimensional array representing the x values of the samples.
+		(ndarray)	ysamples:	1 dimensional array representing the y values of the samples.
+		(function)	func:		the function to be evaluated.
+		(ndarray)	popt:		the parameters of the function.
+		(float)		threshold:	the threshold for the residual square.
+	Returns:
+		(bool)		False if all the residuals are above the threshold for each sample, True otherwise.
+	"""
+	return not np.all((ysamples - func(xsamples, *popt))**2 > threshold)
+
+def find_sine_phase(ydata, timebase_ns, ydata_max, samples_after_zero, samples_before_end, freq = 0.25, fail_threshold = 0.1, fail_consecutive = 3):
 		"""
 		Finds the phase of a sine wave in the waveform.
 		x must refer to a point in the waveform that is not in the trigger region, AFTER the rollover.
@@ -314,21 +388,49 @@ def find_sine_phase(ydata, timebase_ns, ydata_max, samples_after_zero, samples_b
 			(ndarray)	timebase_ns:	the time distance (in nanoseconds) between i th and i+1 th sample in ydata. must have the same length as ydata, and has been rolled, i.e. timebase_ns[0] corresponds to ydata[x_start_cap].
 			(float)		x:			the time of the waveform at which the phase is to be found.
 			(int)		samples_before_end:	number of samples to exclude before the end, to avoid the trigger region.
+			(float)		freq:		frequency of the sine wave in the waveform, in GHz.
+			(float)		fail_threshold:	threshold for the residual square of the fit. If the residual square of a single sample is greater than this value times the sine amplitude squared, the fit is considered to have failed at that sample.
+			(int)		fail_consecutive:	number of consecutive samples that must fail the fit for the function to throw an warning.
+
+		Returns:
+			(list)		[phi, A, B]:	phase, amplitude, offset of the sine wave.
+			(int)		trigger_region_from_beginning:	index of the last sample of the trigger region determined by the sine fit residual, from the beginning of the waveform.
 		"""
-		#Sine wave frequency in gigahertz. Note that sin_const_back_250 must be adjusted if this is changed.
-		FREQ = 0.25
 		#Fit the sine wave using curve_fit
 		p0 = [0, ydata_max, 0]#Amplitude, phase, offset
 		param_scale = [np.pi, ydata_max , ydata_max*0.1]#Rough scale of the parameters, used to adjust the step size in the minimization routine.
-		single_cycle = int(1/FREQ / (25/256))
+		single_cycle = int(1/freq / (25/256))
 		start_point = samples_after_zero + single_cycle
 		#The bounds are empirically set to be reasonable for LAPPD waveforms. In particular, the amplitude has to be positive. 
 		#The first fit is done over a single cycle of the waveform, to get a rough estimate of the parameters.
-		popt, pcov = curve_fit(sin_const_back_250, xdata = timebase_ns[start_point:start_point+single_cycle], ydata = ydata[start_point:start_point+single_cycle], p0=p0, bounds=([-2*np.pi, ydata_max*0.5, -ydata_max*0.5], [2*np.pi, ydata_max*1.5, ydata_max*0.5]), x_scale = param_scale)
+		popt, pcov = curve_fit(lambda x, phi, A, B: sin_const_back(x, phi, A, B, freq), xdata = timebase_ns[start_point:start_point+single_cycle], ydata = ydata[start_point:start_point+single_cycle], p0=p0, bounds=([-2*np.pi, ydata_max*0.5, -ydata_max*0.5], [2*np.pi, ydata_max*1.5, ydata_max*0.5]), x_scale = param_scale)
 
 		#The second fit is done with the amplitude and offset fixed to the value found in the first fit. This is done to improve the fit.
-		phi, pcov = curve_fit(lambda x, phi: sin_const_back_250(x, phi, popt[1], popt[2]), xdata = timebase_ns[samples_after_zero:-samples_before_end], ydata = ydata[samples_after_zero:-samples_before_end], p0=popt[0], bounds=(-2*np.pi, 2*np.pi))
-		return [phi, popt[1], popt[2]]
+		phi, pcov = curve_fit(lambda x, phi: sin_const_back(x, phi, popt[1], popt[2], freq), xdata = timebase_ns[samples_after_zero:-samples_before_end], ydata = ydata[samples_after_zero:-samples_before_end], p0=popt[0], bounds=(-2*np.pi, 2*np.pi))
+
+		##############################################################Fit is Done. Now we identify trigger region.################################################################
+		# The trigger region is the region where the waveform is not sinusoidal.
+		#The trigger region is identified by finding the three concecutive samples with the square of the residual greater than the threshold.
+		# We start from the 25% of the waveform and move forward in time.
+		
+		#First we make sure that at the 25% of the waveform, the waveform is sinusoidal.
+		#If not, throw a warning.
+		window_begin = int(0.25*ydata.size)
+		if(not test_residual_square(timebase_ns[window_begin:window_begin+fail_consecutive], ydata[window_begin:window_begin+fail_consecutive], sin_const_back, [phi, popt[1], popt[2], freq], fail_threshold*popt[1]**2)):
+			raise ValueError("The waveform is not sinusoidal at the 25% of the waveform. The fit may be incorrect.")
+		
+		#Now we move forward in time, and find the trigger region.
+		trigger_region_from_beginning = 0
+		for i in range(window_begin, 0, -1):
+			if(not test_residual_square(timebase_ns[i:i+fail_consecutive], ydata[i:i+fail_consecutive], sin_const_back, [phi, popt[1], popt[2], freq], fail_threshold*popt[1]**2)):
+				trigger_region_from_beginning = i+fail_consecutive
+				break
+
+
+
+		return [phi, popt[1], popt[2]], trigger_region_from_beginning
+
+
 
 def calc_vpos(xv, yv, mu0):
 		p0 = [-0.25*yv.max(), 0.01, mu0, 0.8]
@@ -342,30 +444,6 @@ def calc_vpos(xv, yv, mu0):
 
 		return popt[2]
 
-def leading_edge_bounds(xh, yh):
-
-		yh_temp = -yh + yh.max()
-		min_height = 0.6*yh_temp.max()
-		peak_dist = 20
-		
-		peaks_rough = find_peaks(yh_temp, height=min_height, distance=peak_dist)[0]
-		prompt_ind, reflect_ind = peaks_rough[peaks_rough > 8][0:2]
-
-		lbound = prompt_ind - 25
-		if lbound < 0:
-			lbound = 0
-		rbound = prompt_ind + 4
-		subdomain = xh[lbound:rbound]
-		subrange = yh[lbound:rbound]
-		cspline = CubicSpline(subdomain, subrange, extrapolate=False, bc_type='natural')
-
-		ymin, ymax = yh[lbound], yh[prompt_ind]
-		lbound_y = ymin - 0.1*(ymin-ymax)
-		rbound_y = ymin - 0.9*(ymin-ymax)
-		
-		lbound = cspline.solve(lbound_y, extrapolate=False)[0]
-		rbound = cspline.solve(rbound_y, extrapolate=False)[0]
-		return lbound, rbound, reflect_ind
 
 def find_lsquares(xh, yh, lbound, rbound, offsets):
 

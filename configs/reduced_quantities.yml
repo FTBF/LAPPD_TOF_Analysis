@@ -11,13 +11,17 @@ global:
   evt_count: int #event index in the file it came from
   pps: float #1 Hz counter pulse-per-second from WR ZEN
   first_peak: float #times in ns of first pulse hitting readout
+  wr_phi0: float #phase of the WR 250 MHz clock at the start of the event
   wr_phi: float #phase from fitting sin(omega*t - phi)
   wr_freq: float #the WR 250 MHz frequency, in case it is not fixed
+  wr_amplitude: float #amplitude of the WR 250 MHz clock
+  wr_offset: float #offset of the WR 250 MHz clock
   peak_ch: int #channel with the maximum amplitude for each event.
   start_cap: int #left bound of the trigger octant, from 0 to 255
   error_codes: array_int #a list of error codes for the event that indicate why it failed to reconstruct
   total_charge: float #add unit later, total charge in the event from reconstructable waveforms
   time_measured_ch: int #channel that is used for the time of arrival reconstruction. Currently only one channel is used per event. If peak_ch is populated, this is usually the same channel.
+  corrupted_samples_from_begin: int #number of samples that are corrupted, counted from the beginning of the waveform
 
 #channel specific reduced quantities, which will have a key
 #like "ch3_"+reduced_quantity_name. References the strip-number
@@ -31,3 +35,4 @@ channel:
   is_hit: int #0 or 1, whether the channel has enough amplitude to consider for reconstruction
   peak_times: array_float #only if is_hit, times in ns of the peaks in the waveform
   amplitude: float #only if is_hit, amplitudes in mV of the primary peak in the waveform. This can be different from max/min after spline fit.
+  warnings: array_string #a list of warnings for the channel that indicate why it failed to reconstruct

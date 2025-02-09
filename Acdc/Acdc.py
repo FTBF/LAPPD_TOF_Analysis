@@ -393,6 +393,14 @@ class Acdc:
 
 
 	####################reduction functions###################################
+	def filter_events(self, mask):
+		if mask is None:
+			return
+		#filter the events array by the mask
+		self.events = self.events[:][mask]
+		self.numevents = len(self.events["sys_time"])
+		
+
 
 	def initialize_rqs(self):
 		#the output data structure contains many reduced
@@ -407,14 +415,15 @@ class Acdc:
 			self.rq_config = None
 		
 		self.rqs = {}
+		self.numevents = len(self.events["sys_time"])
 		#initialize the global event branches (not channel specific)
 		for key, str_type in self.rq_config["global"].items():
-			self.rqs[key] = []
+			self.rqs[key] = [0]*self.numevents #Can't use np.zeros because we also store strings
 
 		#initialize the channel specific branches
 		for ch in range(30):
 			for key, str_type in self.rq_config["channel"].items():
-				self.rqs["ch{:d}_{}".format(ch, key)] = []
+				self.rqs["ch{:d}_{}".format(ch, key)] = [0]*self.numevents
 
 	def roll_waveforms(self):
 		#Splits the ring buffer into octants and finds a lower bound for the octant that the trigger is in
@@ -440,7 +449,7 @@ class Acdc:
 		# Store copies of the timebase data for each event, as we will roll the timebase for each event.
 		self.times_rolled= [np.cumsum(np.roll(self.times, 1-trigger_low_bound[ev], axis=1), axis = 1) for ev in range(len(trigger_low_bound))]
 
-	def reduce_data(self):
+	def reduce_data(self, event_mask = None):
 
 		############initialization functions##############
 		#initialize the reduced quantities data structure
@@ -457,9 +466,14 @@ class Acdc:
 		wr_times = np.array(self.events["wr_time"])
 		self.rqs["pps"] = ((wr_times >> 32) & 0xffffffff) #the 1 Hz counter referencing 250 MHz WR ZEN
 		self.rqs["wr_time"] = (wr_times & 0xffffffff) #the 250 MHz counter from WR ZEN that resets every 1 second
-		self.rqs["error_codes"] = [[] for i in range(len(self.events["sys_time"]))] #a list of error codes for each event. sys_time is just an example column to get the length of the list.
+		self.rqs["error_codes"] = [[] for i in range(self.numevents)] #a list of error codes for each event. sys_time is just an example column to get the length of the list.
+		for ch in range(30):
+			self.rqs["ch{:d}_warnings".format(ch)] = [[] for i in range(self.numevents)]
+		
 		#####event vectorized operations############
 
+		self.filter_events(event_mask)
+		print("ACDC"+str(self.c["acdc_id"])+" numevents: "+str(self.numevents))
 		#uses information on the trigger time to roll
 		#the buffer of the waveforms to be causal
 		self.roll_waveforms()
@@ -469,25 +483,35 @@ class Acdc:
 		#analysis that knows nothing about peak locations. Takes
 		#input on baseline samples from the configuration files. 
 		self.analyze_and_subtract_baselines()
-
 		#find the maximum amplitude channel for each event
 		self.find_minmax_of_channels()
 
 		#get the full standard deviation of the whole waveform
 		self.find_full_std()
 
+		#Fit the sine channel and measure the precise trigger region
+		self.fit_sine_channel()
+
 		#find channels that seem to be hit by pulses that are reconstructable
 		self.find_hit_chs()
+
+		#find the precision baseline subtracted waveforms
+		self.analyze_and_subtract_baselines_high_precision()
+		#find the maximum amplitude channel for each event with the high precision baseline
+		self.find_minmax_of_channels()
+
 
 		self.reconstruct_peak_time(verbose=True)
 
 		#For each event, mark the channel which is optimal for reconstructing the arrival time, by looking at their peak amplitudes.
 		self.identify_peak_channels(verbose=True)
 
-		self.reconstruct_position(verbose=True)
-
 		#find the phase info on WR channels
 		self.construct_wr_phi(verbose=True)
+
+		self.reconstruct_position(verbose=True)
+
+		
 
 	###########################Analysis functions####################################
 	def calc_longitudinal_pos(self):
@@ -525,6 +549,71 @@ class Acdc:
 
 		#subtract the baseline from the waveforms
 		self.events["waves"] = waves - baselines[:, :, np.newaxis]
+
+	def analyze_and_subtract_baselines_high_precision(self, verbose = True):
+		"""
+		Analyzes the baselines of the waveforms with a higher precision than the simple method.
+		To run this method, you need to first run the sine channel fitting to get the trigger region and then run the find_hit_chs method.
+		"""
+		waves = np.array(self.events["waves"])
+
+		#First, we identify the first peak of the waveform, because the baseline is calculated from the samples before the first peak.
+		for ch in range(30):
+			min_values = self.rqs["ch{}_min".format(ch)]
+			success = 0
+			baselines = []
+			baseline_std_values = []
+			#Apply peak finding to events whose is_hit is true and populate the peak info.
+			#This can be parallelized in the future as well.
+			for ev, is_hit in enumerate(self.rqs["ch{}_is_hit".format(ch)]):
+				if (is_hit):
+					try:
+						#The sign of waves is flipped because the peak finding function finds the peak of the negative of the waveform.
+						baseline, baseline_std_value = Util.find_baseline(ydata = -waves[ev, ch], y_robust_min = min_values[ev], timebase_ns= self.times_rolled[ev][ch], trigger_region_last_sample = self.rqs["corrupted_samples_from_begin"][ev])
+						success += 1
+					except ValueError as e:
+						if(verbose):
+							print("High Precision Baseline finding failed for event {:d} on channel {:d}, due to ValueError: {:s}".format(ev, ch, str(e)))
+						#Do not change the current baseline.
+						baseline = self.rqs["ch{}_baseline".format(ch)][ev]
+						baseline_std_value = self.rqs["ch{}_baseline_std".format(ch)][ev]
+						self.rqs["ch{}_warnings".format(ch)][ev].append(e)
+					except IndexError as e:
+						if(verbose):
+							print("High Precision Baseline finding failed for event {:d} on channel {:d}, due to IndexError: {:s}".format(ev, ch, str(e)))
+						#Do not change the current baseline.
+						baseline = self.rqs["ch{}_baseline".format(ch)][ev]
+						baseline_std_value = self.rqs["ch{}_baseline_std".format(ch)][ev]
+						self.rqs["ch{}_warnings".format(ch)][ev].append(e)
+					except TypeError as e:
+						if(verbose):
+							print("High Precision Baseline finding failed for event {:d} on channel {:d}, due to TypeError: {:s}".format(ev, ch, str(e)))
+						#Do not change the current baseline.
+						baseline = self.rqs["ch{}_baseline".format(ch)][ev]
+						baseline_std_value = self.rqs["ch{}_baseline_std".format(ch)][ev]
+						self.rqs["ch{}_warnings".format(ch)][ev].append(e)
+				else:
+					#We have to append something to keep the length of the array consistent with the number of events.
+					#Do not change the current baseline.
+					baseline = self.rqs["ch{}_baseline".format(ch)][ev]
+					baseline_std_value = self.rqs["ch{}_baseline_std".format(ch)][ev]
+				baselines.append(-baseline) # The sign of the baseline is flipped because we filpped the sign of the waveform.
+				baseline_std_values.append(baseline_std_value)
+			if verbose:
+				print("Measured high precision baseline for channel {:d}".format(ch))
+				#Print the number of non default peak times to check for errors
+				print("Number of events with high precision baseline calibration for channel {:d}: {:d}".format(ch, success))
+			self.rqs["ch{}_baseline_precise".format(ch)] = np.array(baselines)
+			self.rqs["ch{}_baseline_std_precise".format(ch)] = np.array(baseline_std_values)
+			#For all events in this channel, add the original baseline back and subtract the new baseline.
+			# The shape of waves is (n_events, 30, 256)
+			# The shape of self.rqs["ch{}_baseline".format(ch)] is (n_events, 256)
+			# The shape of self.rqs["ch{}_baseline_precise".format(ch)] is (n_events, 256)
+
+			# Simple Baseline is already subtracted from the waves. We need to add it back. Just subtract the new baseline for find_baseline
+			waves[:, ch, :] += (-self.rqs["ch{}_baseline_precise".format(ch)])[:, np.newaxis]
+			self.events["waves"] = waves
+			
 
 
 	#Populate everything except the peak times, which are event looped and much slower
@@ -600,7 +689,7 @@ class Acdc:
 		"""
 		hpos_list = []
 		vpos_list = []
-		for ev in range(len(self.rqs["ch0_is_hit"])):#Peculiarly, the length of the is_hit arrays is not the number of events
+		for ev in range(self.numevents):
 			ch =self.rqs["peak_ch"][ev]
 			vpos = -1
 			hpos = -1
@@ -614,7 +703,33 @@ class Acdc:
 		self.rqs["hpos"] = hpos_list
 		self.rqs["vpos"] = vpos_list
 		
+	def fit_sine_channel(self, verbose = False):
+		
+		#Using Util.find_sine_phase to find the phase of the WR signal
+		#and populate the rqs with the results.
+		waves = np.array(self.events["waves"])
+		success = 0
+		
 
+		for ev in range(self.numevents):
+			try:
+				ch = int(self.rqs["time_measured_ch"][ev])
+
+				#find_sine_phase also returns the corrupted samples from the beginning of the waveform, which can be used to find the true baseline.
+				popt, corrupted_samples_from_begin = Util.find_sine_phase(ydata = waves[ev, self.c["sync_ch"]], timebase_ns = self.times_rolled[ev][ch], ydata_max = self.rqs["ch{}_max".format(self.c["sync_ch"])][ev], samples_after_zero = self.c["sine_fit_exclusion_samples_after_zero"],  samples_before_end = self.c["sine_fit_exclusion_samples_before_end"])
+				
+				#Store Fit details as reduced quantities
+				self.rqs["wr_phi0"][ev] = popt[0]
+				self.rqs["wr_amplitude"][ev] = popt[1]
+				self.rqs["wr_offset"][ev] = popt[2]
+				self.rqs["corrupted_samples_from_begin"][ev] = corrupted_samples_from_begin
+
+				success += 1
+			except ValueError:
+				self.rqs["error_codes"][ev].append(Errorcodes.Station_Error.SIN_FIT_VALUE_ERROR)#Fit value error
+			except RuntimeError:
+				self.rqs["error_codes"][ev].append(Errorcodes.Station_Error.SIN_FIT_FAIL)#Fit fail
+			
 	def construct_wr_phi(self, verbose = False):
 		"""
 		Constructs the phase of the WR signal for each event.
@@ -625,8 +740,8 @@ class Acdc:
 		avg_peak_time = []
 		#Create masks for events with exactly two peaks, as we will only analyze these events.
 		two_peaks_mask = []
-		self.rqs["time_measured_ch"] = np.zeros(len(self.rqs["ch0_is_hit"]))
-		for ev in range(len(self.rqs["ch0_is_hit"])):#Peculiarly, the length of the is_hit arrays is not the number of events
+		self.rqs["time_measured_ch"] = np.zeros(self.numevents)
+		for ev in range(self.numevents):
 			if self.rqs["ch{}_is_hit".format(int(self.rqs["peak_ch"][ev]))][ev] == 1:
 				ch = self.rqs["peak_ch"][ev]
 			else:
@@ -648,28 +763,9 @@ class Acdc:
 		success = 0
 		self.rqs["wr_phi"] = np.zeros_like(waves[:, 0, 0])
 
-		#Fit details for debugging
-		self.rqs["wr_Phi0"] = np.zeros_like(waves[:, 0, 0])
-		self.rqs["wr_Amplitude"] = np.zeros_like(waves[:, 0, 0])
-		self.rqs["wr_Offset"] = np.zeros_like(waves[:, 0, 0])
-
 		for ev, is_particle in enumerate(two_peaks_mask):
 			if (is_particle):
-				try:
-					ch = int(self.rqs["time_measured_ch"][ev])
-					popt = Util.find_sine_phase(ydata = waves[ev, self.c["sync_ch"]], timebase_ns = self.times_rolled[ev][ch], ydata_max = self.rqs["ch{}_max".format(self.c["sync_ch"])][ev], samples_after_zero = self.c["sine_fit_exclusion_samples_after_zero"],  samples_before_end = self.c["sine_fit_exclusion_samples_before_end"])
-					self.rqs["wr_phi"][ev] = popt[0] + avg_peak_time[ev]/4*2*np.pi #The phase of the WR signal is the phase of the sine wave at the time of the point between the two peaks.
-
-					#Fit details for debugging
-					self.rqs["wr_Phi0"][ev] = popt[0]
-					self.rqs["wr_Amplitude"][ev] = popt[1]
-					self.rqs["wr_Offset"][ev] = popt[2]
-
-					success += 1
-				except ValueError:
-					self.rqs["error_codes"][ev].append(Errorcodes.Station_Error.SIN_FIT_VALUE_ERROR)#Fit value error
-				except RuntimeError:
-					self.rqs["error_codes"][ev].append(Errorcodes.Station_Error.SIN_FIT_FAIL)#Fit fail
+				self.rqs["wr_phi"][ev] = self.rqs["wr_phi0"][ev] + avg_peak_time[ev]/4*2*np.pi #The phase of the WR signal is the phase of the sine wave at the time of the point between the two peaks.
 			else:
 				self.rqs["error_codes"][ev].append(Errorcodes.Station_Error.NOT_TWO_PEAKS)#The number of peaks identified in this event is not two.
 		if verbose:

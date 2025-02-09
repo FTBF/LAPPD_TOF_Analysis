@@ -572,26 +572,20 @@ class Acdc:
 						baseline, baseline_std_value = Util.find_baseline(ydata = -waves[ev, ch], y_robust_min = min_values[ev], timebase_ns= self.times_rolled[ev][ch], trigger_region_last_sample = self.rqs["corrupted_samples_from_begin"][ev])
 						success += 1
 					except ValueError as e:
-						if(verbose):
-							print("High Precision Baseline finding failed for event {:d} on channel {:d}, due to ValueError: {:s}".format(ev, ch, str(e)))
 						#Do not change the current baseline.
 						baseline = self.rqs["ch{}_baseline".format(ch)][ev]
 						baseline_std_value = self.rqs["ch{}_baseline_std".format(ch)][ev]
-						self.rqs["ch{}_warnings".format(ch)][ev].append(e)
+						self.rqs["ch{}_warnings".format(ch)][ev].append("High Precision Baseline finding failed for event {:d} on channel {:d}, due to ValueError: {:s}".format(ev, ch, str(e)))
 					except IndexError as e:
-						if(verbose):
-							print("High Precision Baseline finding failed for event {:d} on channel {:d}, due to IndexError: {:s}".format(ev, ch, str(e)))
 						#Do not change the current baseline.
 						baseline = self.rqs["ch{}_baseline".format(ch)][ev]
 						baseline_std_value = self.rqs["ch{}_baseline_std".format(ch)][ev]
-						self.rqs["ch{}_warnings".format(ch)][ev].append(e)
+						self.rqs["ch{}_warnings".format(ch)][ev].append("High Precision Baseline finding failed for event {:d} on channel {:d}, due to IndexError: {:s}".format(ev, ch, str(e)))
 					except TypeError as e:
-						if(verbose):
-							print("High Precision Baseline finding failed for event {:d} on channel {:d}, due to TypeError: {:s}".format(ev, ch, str(e)))
 						#Do not change the current baseline.
 						baseline = self.rqs["ch{}_baseline".format(ch)][ev]
 						baseline_std_value = self.rqs["ch{}_baseline_std".format(ch)][ev]
-						self.rqs["ch{}_warnings".format(ch)][ev].append(e)
+						self.rqs["ch{}_warnings".format(ch)][ev].append("High Precision Baseline finding failed for event {:d} on channel {:d}, due to TypeError: {:s}".format(ev, ch, str(e)))
 				else:
 					#We have to append something to keep the length of the array consistent with the number of events.
 					#Do not change the current baseline.
@@ -646,20 +640,17 @@ class Acdc:
 						output, peaks, amplitude = Util.find_peak_time_CFD(ydata = -waves[ev, ch], y_robust_min = min_values[ev], timebase_ns= self.times_rolled[ev][ch])
 						success += 1
 					except ValueError as e:
-						if(verbose):
-							print("Peak finding failed for event {:d} on channel {:d}, due to ValueError: {:s}".format(ev, ch, str(e)))
 						output = [-1]
 						# Do not put an error code here, as we don't want to throw this event based on a single channel.
+						self.rqs["ch{}_warnings".format(ch)][ev].append("Peak finding failed for event {:d} on channel {:d}, due to ValueError: {:s}".format(ev, ch, str(e)))
 					except IndexError as e:
-						if(verbose):
-							print("Peak finding failed for event {:d} on channel {:d}, due to IndexError: {:s}".format(ev, ch, str(e)))
 						output = [-1]
 						# Do not put an error code here, as we don't want to throw this event based on a single channel.
+						self.rqs["ch{}_warnings".format(ch)][ev].append("Peak finding failed for event {:d} on channel {:d}, due to IndexError: {:s}".format(ev, ch, str(e)))
 					except TypeError as e:
-						if(verbose):
-							print("Peak finding failed for event {:d} on channel {:d}, due to TypeError: {:s}".format(ev, ch, str(e)))
 						output = [-1]
 						# Do not put an error code here, as we don't want to throw this event based on a single channel.
+						self.rqs["ch{}_warnings".format(ch)][ev].append("Peak finding failed for event {:d} on channel {:d}, due to TypeError: {:s}".format(ev, ch, str(e)))
 				else:
 					#We have to append something to keep the length of the array consistent with the number of events.
 					#We append -1 to indicate that the peak time was not found. Do not put an error code here, as we don't want to throw this event based on a single channel.

@@ -82,7 +82,7 @@ def find_baseline(ydata, y_robust_min, timebase_ns, trigger_region_last_sample, 
 	bsplinePoly = PPoly.from_spline(spline_tuple)
 	bsplinePolyPrime = bsplinePoly.derivative()
 	# For debugging, print the maximum residual of the spline.
-	print("Splrep Max Residual:"+str(np.max(np.abs(ydata_slope - bsplinePoly(xdata_slope))))+"where the data changes from "+str(ydata_slope[0])+" to "+str(ydata_slope[-1]))
+	# print("Splrep Max Residual:"+str(np.max(np.abs(ydata_slope - bsplinePoly(xdata_slope))))+"where the data changes from "+str(ydata_slope[0])+" to "+str(ydata_slope[-1]))
 
 	###################################################### End of Filtering #####################################################
 
@@ -304,13 +304,14 @@ def find_peak_time_10_90(ydata, y_robust_min, timebase_ns, forward_samples = 20)
 		peaks[i] = impact_time
 	return peaks
 
-def find_peak_time_CFD(ydata, y_robust_min, timebase_ns, forward_samples = 25, backward_samples = 0, threshold = 0.22, forward_ns_effective_amplitude = 0, sample_distance = 0.01, trailing_edge_limit = 180):
+def find_peak_time_CFD(ydata, y_robust_min, timebase_ns, forward_samples = 25, backward_samples = 5, threshold = 0.22, sample_distance = 0.01, trailing_edge_limit = 180):
 	"""Finds the time of the peak of the waveform.
 	Arguments:	
 		(ndarray)	ydata:		1 dimensional array representing the waveform, after rollover. Peaks must be positive.
 		(float)		y_robust_min:peaks are found by comparing the waveform to this value
 		(ndarray)	timebase_ns:	the time distance (in nanoseconds) between i th and i+1 th sample in ydata. must have the same length as ydata, and has been rolled, i.e. timebase_ns[0] corresponds to ydata[x_start_cap].
 		(int)		forward_samples:	number of samples to take before the peak to find the inflection point.
+		(int)		backward_samples:number of samples to take after the peak to find the inflection point. If this number is too smal, peak finding with derivative will fail.
 		(float)		threshold:		maximum slope times the threshold is the slope of the waveform at the returned peak time.
 	"""
 	peaks, peaks_index, peak_height = find_peak_time_basic(ydata, y_robust_min, timebase_ns)
@@ -340,7 +341,7 @@ def find_peak_time_CFD(ydata, y_robust_min, timebase_ns, forward_samples = 25, b
 	primary_peak_from_derivation = peaks_from_derivation[np.argmax(bsplinePoly(peaks_from_derivation))]
 
 	#This amplitude is feed back to Acdc reduced quantities for analysis.
-	amplitude = bsplinePoly(primary_peak_from_derivation- forward_ns_effective_amplitude)
+	amplitude = bsplinePoly(primary_peak_from_derivation)
 
 	#The start_value serves as a local baseline for the CFD. It is the average of the first 5 samples of the waveform in the beginning of the window.
 	start_value = np.mean([bsplinePoly(timebase_ns[start_cap+i]) for i in range(5)])

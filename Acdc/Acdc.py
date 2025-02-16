@@ -591,7 +591,7 @@ class Acdc:
 					#Do not change the current baseline.
 					baseline = self.rqs["ch{}_baseline".format(ch)][ev]
 					baseline_std_value = self.rqs["ch{}_baseline_std".format(ch)][ev]
-				baselines.append(-baseline) # The sign of the baseline is flipped because we filpped the sign of the waveform.
+				baselines.append(self.rqs["ch{}_baseline".format(ch)][ev]-baseline) # The sign of the baseline is flipped because we filpped the sign of the waveform.
 				baseline_std_values.append(baseline_std_value)
 			if verbose:
 				print("Measured high precision baseline for channel {:d}".format(ch))
@@ -604,8 +604,8 @@ class Acdc:
 			# The shape of self.rqs["ch{}_baseline".format(ch)] is (n_events, 256)
 			# The shape of self.rqs["ch{}_baseline_precise".format(ch)] is (n_events, 256)
 
-			# Simple Baseline is already subtracted from the waves. We need to add it back. Just subtract the new baseline for find_baseline
-			waves[:, ch, :] += (-self.rqs["ch{}_baseline_precise".format(ch)])[:, np.newaxis]
+			# Simple Baseline is already subtracted from the waves. We need to add it back.
+			waves[:, ch, :] += (self.rqs["ch{}_baseline".format(ch)]-self.rqs["ch{}_baseline_precise".format(ch)])[:, np.newaxis]
 			self.events["waves"] = waves
 			
 
@@ -626,7 +626,7 @@ class Acdc:
 		for ch in range(30):
 			min_values = self.rqs["ch{}_min".format(ch)]
 			start_caps = self.rqs["start_cap"]
-			peak_times_ch = []
+			impact_times_ch = []
 			amplitudes_ch = []
 			success = 0
 			#Apply peak finding to events whose is_hit is true and populate the peak info.
@@ -655,13 +655,13 @@ class Acdc:
 					#We have to append something to keep the length of the array consistent with the number of events.
 					#We append -1 to indicate that the peak time was not found. Do not put an error code here, as we don't want to throw this event based on a single channel.
 					output = [-1]
-				peak_times_ch.append(output)
+				impact_times_ch.append(output)
 				amplitudes_ch.append(amplitude)
 			if verbose:
 				print("Populated peak times for channel {:d}".format(ch))
 				#Print the number of non default peak times to check for errors
 				print("Number of events with non-default peak times for channel {:d}: {:d}".format(ch, success))
-			self.rqs["ch{}_peak_times".format(ch)] = peak_times_ch
+			self.rqs["ch{}_impact_times".format(ch)] = impact_times_ch
 			self.rqs["ch{}_amplitudes".format(ch)] = amplitudes_ch
 
 	def identify_peak_channels(self, verbose = False):
@@ -686,7 +686,7 @@ class Acdc:
 			hpos = -1
 			try:
 				vpos = ch * self.c["strip_pitch"] #TODO: This is a temporary solution. We need to do a function fit for the transverse position.
-				hpos = ((self.rqs["ch{}_peak_times".format(ch)][ev][1] - self.rqs["ch{}_peak_times".format(ch)][ev][0])*self.c["vel"] - 2*self.c["strip_length_ns"])/2
+				hpos = ((self.rqs["ch{}_impact_times".format(ch)][ev][1] - self.rqs["ch{}_impact_times".format(ch)][ev][0])*self.c["vel"] - 2*self.c["strip_length_ns"])/2
 			except:
 				self.rqs["error_codes"][ev].append(Errorcodes.Station_Error.POS_RECON_FAIL)#Position reconstruction failed
 			hpos_list.append(hpos)
@@ -727,8 +727,8 @@ class Acdc:
 		Must be run after identify_peak_channels.
 		"""
 		#We assume that peak_ch has been populated. peak_ch must have exactly two peaks.
-		#First, we find the average peak time for each event, and also create a mask for events with exactly two peaks.
-		avg_peak_time = []
+		#This is the target time derived from the waveform analysis.
+		tgt_time = []
 		#Create masks for events with exactly two peaks, as we will only analyze these events.
 		two_peaks_mask = []
 		self.rqs["time_measured_ch"] = np.zeros(self.numevents)
@@ -742,9 +742,13 @@ class Acdc:
 						break
 				self.rqs["error_codes"][ev].append(Errorcodes.Station_Error.IMPROPER_PEAK_CH)#Improper peak channel
 			self.rqs["time_measured_ch"][ev] = int(ch)
-			#avg_peak_time.append(np.mean(self.events["ch{}_peak_times".format(ch)][ev]))
-			avg_peak_time.append(self.rqs["ch{}_peak_times".format(ch)][ev][0])
-			two_peaks_mask.append(np.size(self.rqs["ch{}_peak_times".format(ch)][ev]) == 2)
+			
+			# !!IMPORTANT!!
+			# Target time can be computed from the mean of the impact times of the two pulses. This is useful if the incident particle is not parallel to the principal axis of the detector.
+			# Instead, if the particle is assumed to be parallel to the principal axis of the detector, we can take the first impact time as the target time.
+			#tgt_time.append(np.mean(self.events["ch{}_impact_times".format(ch)][ev]))
+			tgt_time.append(self.rqs["ch{}_impact_times".format(ch)][ev][0])
+			two_peaks_mask.append(np.size(self.rqs["ch{}_impact_times".format(ch)][ev]) == 2)
 
 		##################################################################################################################################################
 
@@ -756,7 +760,7 @@ class Acdc:
 
 		for ev, is_particle in enumerate(two_peaks_mask):
 			if (is_particle):
-				self.rqs["wr_phi"][ev] = self.rqs["wr_phi0"][ev] + avg_peak_time[ev]/4*2*np.pi #The phase of the WR signal is the phase of the sine wave at the time of the point between the two peaks.
+				self.rqs["wr_phi"][ev] = self.rqs["wr_phi0"][ev] + tgt_time[ev]/4*2*np.pi #The phase of the WR signal is the phase of the sine wave at the time of the point between the two peaks.
 			else:
 				self.rqs["error_codes"][ev].append(Errorcodes.Station_Error.NOT_TWO_PEAKS)#The number of peaks identified in this event is not two.
 		if verbose:

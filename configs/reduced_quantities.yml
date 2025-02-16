@@ -33,6 +33,6 @@ channel:
   max: float #mV, maximum sample of the waveform
   min: float #mV, minimum sample of the waveform
   is_hit: int #0 or 1, whether the channel has enough amplitude to consider for reconstruction
-  peak_times: array_float #only if is_hit, times in ns of the peaks in the waveform
+  impact_times: array_float #only if is_hit, times in ns of the impact time in the waveform. Impact time is the only time that is used in time of flight analysis, and it could be the peak, inflection point, or other point of interest, depending on the reconstruction method.
   amplitude: float #only if is_hit, amplitudes in mV of the primary peak in the waveform. This can be different from max/min after spline fit.
   warnings: array_string #a list of warnings for the channel that indicate why it failed to reconstruct

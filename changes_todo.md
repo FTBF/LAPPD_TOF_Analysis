@@ -9,3 +9,8 @@
 - Add argument to ACDC::process_files that handles pedestal files better. We will pass a list of pedestal files in parallel with a list of data files. This function should check for the closest-in-time pedestal file and, if it hasn't been calibrated by that file already, recalibrate using that file. 
 - Timestamp management during data logging, and documenting how the timestamp counters work, reference, etc. Include data run start time in the metadata of a run.
 - Look at wraparound and reflect indices
+
+# Analysis algo
+- Build a template of 10-90 curve and then to impact_finding with the template.
+- Investigate Transverse (2D) pulse arrival pattern
+- Time difference histogram between the optimal channel and the adjacent channel. If the spread is too large we have identified a problem.

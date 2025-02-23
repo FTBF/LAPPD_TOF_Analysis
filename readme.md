@@ -3,8 +3,12 @@
 - Take the prereduced files and output the reduced files, per station.
 - Interstation analysis: Compute the time of flight between multiple LAPPD stations, provided the synchronization channel in each station is taking the sine wave from the synchronized White Rabbit Zen Modules.
 
+# TODO
+- Check changes_todo.md for the current milestones.
+
 # Examples
-- Run notebooks/Prereduce-Data.ipynb. Last tested with Python 3.11.10.
+- To create prereduced data from raw ACDC output, check notebooks/Prereduce-Data.ipynb. Last tested with Python 3.11.10.
+- To analyze the prereduced data, check notebooks/Example_Analysis.ipynb. Last tested with Python 3.11.10.
 
 # Configuration files
 - See configs/acdc43.yml for individual station analysis parameters. See analysis.yml for interstation analysis parameters.

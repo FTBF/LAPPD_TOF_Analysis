@@ -1,13 +1,38 @@
 
-hpos: [] #horiz position
-vpos: [] #vertical position
-times_wr: [] #1Hz and 250MHz clk counter timestamp 
-eventphi: [] #event indexed, phase of 250MHz sine wave at reconstructed arrival time of a pulse
-first_peak: [] #event indexed, times in ns of first pulse hitting readout
-phi: [] #event indexed, phase from fitting sin(omega*t - phi)
-omega: [] #event indexed, frequency from fitting data to sin(omega*t - phi), floating frequency version
-delta_t: [] #event indexed, time between pulses at readout in ns, measured with lsquares
-opt_chs: [] #event indexed, same as waveforms_optch
-chi2: [] #event indexed, failed attempt to quantify sine fits
-startcap: [] #event indexed, left bound of the trigger octant
-num_skipped: 0 #number of events skipped bc of err
+#RQ that are gobal to each event, as opposed to on a channel-to-channel basis
+global:
+  hpos: float #horiz position of the event[mm]
+  vpos: float #vertical position of the event[mm]
+  n_clusters: float #number of clusters (particles) in the event
+  sys_time: int #320 MHz counter synchronous with 40 MHz sampling clock
+  wr_time: int #250 MHz counter PLLd from 100 MHz output of WR ZEN
+  filename: string #name of the file the event came from
+  file_time: float #timestamp unix epoch from filename 
+  evt_count: int #event index in the file it came from
+  pps: float #1 Hz counter pulse-per-second from WR ZEN
+  first_peak: float #times in ns of first pulse hitting readout
+  wr_phi0: float #phase of the WR 250 MHz clock at the start of the event
+  wr_phi: float #phase from fitting sin(omega*t - phi)
+  wr_freq: float #the WR 250 MHz frequency, in case it is not fixed
+  wr_amplitude: float #amplitude of the WR 250 MHz clock
+  wr_offset: float #offset of the WR 250 MHz clock
+  peak_ch: int #channel with the maximum amplitude for each event.
+  start_cap: int #left bound of the trigger octant, from 0 to 255
+  error_codes: array_int #a list of error codes for the event that indicate why it failed to reconstruct
+  total_charge: float #add unit later, total charge in the event from reconstructable waveforms
+  time_measured_ch: int #channel that is used for the time of arrival reconstruction. Currently only one channel is used per event. If peak_ch is populated, this is usually the same channel.
+  corrupted_samples_from_begin: int #number of samples that are corrupted, counted from the beginning of the waveform
+
+#channel specific reduced quantities, which will have a key
+#like "ch3_"+reduced_quantity_name. References the strip-number
+#corrected channel number, not the original raw data chip channel
+channel:
+  baseline: float #mV, baseline of the waveform
+  baseline_std: float #mV, standard deviation of the baseline on the waveform
+  full_std: float #mV, standard deviation of the full waveform
+  max: float #mV, maximum sample of the waveform
+  min: float #mV, minimum sample of the waveform
+  is_hit: int #0 or 1, whether the channel has enough amplitude to consider for reconstruction
+  impact_times: array_float #only if is_hit, times in ns of the impact time in the waveform. Impact time is the only time that is used in time of flight analysis, and it could be the peak, inflection point, or other point of interest, depending on the reconstruction method.
+  amplitude: float #only if is_hit, amplitudes in mV of the primary peak in the waveform. This can be different from max/min after spline fit.
+  warnings: array_string #a list of warnings for the channel that indicate why it failed to reconstruct

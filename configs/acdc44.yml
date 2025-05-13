@@ -5,10 +5,10 @@ acdc_id: 44 #board number of the ACDC
 lappd_id: 157 #LAPPD number from Incom
 acc_id: 0 #ACC number (see inventory)
 station_id: 0 #Presently used to identify the "b0" vs "b1" in filename tags that identify stations
-sync_ch: 5 #Channel where there is a sine wave input for synchronization
+sync_ch: 0 #Channel where there is a sine wave input for synchronization, USES CORRECTED STRIP NUMBERING
 
 #calibration related info
-zpos: 0 #The z position of the LAPPD's cathode surface in mm (?). seems unused at the moment
+zpos: 6000 #The z position of the LAPPD's cathode surface in mm.
 corner_offset: [0, 0] #Distance that the corner of the LAPPD is from the beam axis. Shouldn't this be a reconstructed variable? 
 pedestal_file_name: '' #Tag identifier of the pedestal files, which should be in the same folder as the data files
 calib_file_name: '../../data/calibrations/acdc44.root' #path to calibration file name
@@ -19,8 +19,11 @@ strip_pitch: 6.6 #mm
 
 #waveform analysis quantities
 rq_file: "../configs/reduced_quantities.yml" #path to reduced quantities file
-baseline_ns: 5 #number of nanoseconds at the end of the waveform (far from the pulse)
-
+baseline_ns: 5 #number of nanoseconds at the end of the waveform after the pulse for calculating baseline
+hit_threshold: 5 #unitless, (peak_height/baseline_uncertainty) for a channel to be considered a hit
+sine_fit_exclusion_samples_before_end: 20 #number of samples before the end of the waveform to exclude from the sine fit
+sine_fit_exclusion_samples_after_zero: 100 #number of samples after the zero of the waveform to exclude from the sine fit
+clock_offset: 0 #number of octants to shift the waveform to align with the clock
 
 #reduction/processing switch cases
 MAX_PROCESSES: 1

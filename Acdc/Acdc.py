@@ -10,8 +10,14 @@ import scipy.interpolate as spi
 from statsmodels.nonparametric.smoothers_lowess import lowess
 import os
 import pickle
+
+
+#custom classes
+sys.path.append("../Util/")
+sys.path.append("../Errorcodes/")
 import Util
 import Errorcodes
+
 
 global chan_rearrange 
 chan_rearrange = np.array([5,4,3,2,1,0,11,10,9,8,7,6,17,16,15,14,13,12,23,22,21,20,19,18,29,28,27,26,25,24])
@@ -73,7 +79,7 @@ class Acdc:
 
 		#data reduction structures. Initialized when
 		#data reduction is started. 
-		self.rq_confit = None
+		self.rq_config = None
 		self.rqs = {} #the output of data reduction. 
 		self.rolled = False #a flag to indicate if the waveforms have been rolled.
 
@@ -148,8 +154,13 @@ class Acdc:
 					line = f.read((1+4+NUM64BITWORDS)*8)
 					event_index += 1
 		
+		
 		#package into an awkward array
 		self.events = ak.Array(temp_events)
+		print("Done loading")
+
+	def save_reduced_data(self, outfile):
+		pickle.dump([self.rqs, self.rq_config], open(outfile, "wb"))
 
 	#in contrast to the above function, this takes
 	#a single file, with the same structure as a typical file of events,
@@ -290,6 +301,132 @@ class Acdc:
 		#replace the old waveforms with the new ones
 		self.events = ak.with_field(self.events, all_new_waves, where="waves")
 
+
+	#this is a debugging function that allows us to check the difference between
+	#uncalibrated and calibrated waveforms. It performs the same operations as calibrate_waveforms,
+	#but at varioius points saves and exports waveform data to be analyzed by a different
+	#system. It will either return the data structure or save to a pickle file (checkpoint_file). 
+	#you can also tell it to only do so with a limited number of events. Default is 10, as the
+	#data volume will explode pretty quickly if default is "all"
+	def calibrate_waveforms_with_checkpoints(self, pedfiles, checkpoint_file=None, nevents=10):
+		#first check if any data is loaded
+		if(self.events is None):
+			print("No data loaded. Cannot calibrate waveforms.")
+			return
+		#a dictionary indexed by the filename of the data/events file
+		#for which the pedestal data corresponds to. The values of the dict
+		#are a (30, 256) array of averaged pedestal values for each channel. 
+		processed_pedestals = {} 
+
+		#but even if there are many files for the events data, there may be 
+		#only one pedestal file to load. For each unique data file, we will associate
+		#the appropriate pedestal file. 
+		pedfile_for_datafile = {} #key is datafile, value is pedfilename
+
+		#a numpy array of (30, 256, 4096) that converts the 4096 possible ADC values
+		# each capacitor can have to mV
+		adc_to_mv = [] 
+
+
+		##############timebase#################################
+		#check if the timebase data has already been loaded.
+		if(len(self.times) == 0):
+			#load the timebase data
+			print("Loading timebase data")
+			self.load_timebase_data()
+
+		
+
+
+		###############pedestal part first######################
+		#get a set of what file names and timestamps are in the events data. 
+		#we don't want to be loading ALL pedestal files for nothing, and we only
+		#want to load them once. 
+		unique_datafiles = list(set(self.events["filename"]))
+		unique_timestamps = [self.get_timestamp_from_filename(f) for f in unique_datafiles]
+		pedfile_timestamps = [self.get_timestamp_from_filename(f) for f in pedfiles]
+		#for each input datafile, find the pedfile that is closest in time without going over
+		for i in range(len(unique_datafiles)):
+			t0 = unique_timestamps[i]
+			selected_pedfile = pedfiles[np.argmin([t0-t for t in pedfile_timestamps if t0-t >= 0])]
+			pedfile_for_datafile[unique_datafiles[i]] = selected_pedfile
+		
+		#load the pedestal files that are needed. 
+		for datafilename in pedfile_for_datafile:
+			if(datafilename in processed_pedestals): continue
+			print("Loading pedestal data for file {}".format(pedfile_for_datafile[datafilename]))
+			#load that pedestal data into the processed_pedestals dictionary, where the
+			#mean over axis=0 will average over all events for each capacitor
+			processed_pedestals[datafilename] = self.load_pedestal_data(pedfile_for_datafile[datafilename]).mean(axis=0)
+			
+
+		##############adc linearity part########################
+		#check if the lineary data has already been loaded. 
+		if(len(self.adc_to_mv) != 0):
+			adc_to_mv = self.adc_to_mv
+		else:
+			print("Loading linearity data")
+			adc_to_mv = self.load_linearity_data()
+		
+		#the pedestal data is in ADC counts, and can be linearity corrected 
+		#to mV by using the adc_to_mv array.
+		print("Calibrating pedestal data to convert to mV")
+		for k in processed_pedestals.keys():
+			new_pedestals = np.zeros_like(processed_pedestals[k])
+			for ch in range(len(adc_to_mv)):
+				for cap in range(len(adc_to_mv[ch])):
+					#need to interpolate the transfer function because the pedestals are
+					#the result of an average of many events, and thus are not integers. 
+					s = spi.interp1d(np.arange(4096), adc_to_mv[ch][cap], kind="linear")
+					new_pedestals[ch][cap] = s(processed_pedestals[k][ch][cap])
+			processed_pedestals[k] = new_pedestals #Now in mV
+
+		#now we can calibrate the waveforms by first converting to mV and then
+		#pedestal subtracting. 
+		print("Pedestal subtracting and converting to mV for all event waveforms")
+		#This part takes the absolute longest, however I don't know how to vectorize it.
+		#If anyone can vectorize this and re-frame the data back into the original structure,
+		#please take on that challenge. Presently it is about 1.5 events per second on my local machine. 
+		fully_calibrated = []
+		raw_waves = []
+		linearity_corrected = []
+		for i, ev in enumerate(self.events):
+			if(i >= nevents): 
+				print("Reached the limit of {:d} events. Stopping.".format(nevents))
+				break
+
+			print("On event {:d} of {:d}, but limiting to {:d}".format(i, len(self.events), nevents))
+			#find the pedestal data for this event
+			ped = processed_pedestals[ev["filename"]]
+			waves = ev["waves"]
+			#the calibrated waves (to modify)
+			new_waves = np.zeros((30, 256))
+
+			#uses "fancy indexing" to (1) select values along the last dimension of adc_to_mv,
+			#which is the mV associated with each ADC value,. The waves[..., np.newaxis] part 
+			#reshapes waves to be (30, 256, 1) to match the shape of adc_to_mv indexing. 
+			#This results in reshaped_adc_to_mv being adc_to_mv[ch, cap, waves[ch, cap]] for each ch and cap. 
+			reshaped_adc_to_mv = np.take_along_axis(adc_to_mv, waves[...,np.newaxis], axis=2)[...,0]
+			new_waves = reshaped_adc_to_mv - ped
+		
+			fully_calibrated.append(new_waves)
+			raw_waves.append(waves) #the raw waveforms, in ADC counts
+			linearity_corrected.append(reshaped_adc_to_mv) #the linearity corrected waveforms, in mV
+
+
+		output_dict = {
+			"fully_calibrated": np.array(fully_calibrated),
+			"raw_waves": np.array(raw_waves),
+			"linearity_corrected": np.array(linearity_corrected),
+			"adc_to_mv": adc_to_mv,
+			"pedestals": processed_pedestals
+		}
+		if(checkpoint_file is not None):
+			#save the data to a pickle file
+			print("Saving checkpoint data to {}".format(checkpoint_file))
+			pickle.dump([output_dict], open(checkpoint_file, "wb"))
+		
+		return output_dict
 
 
 	#saves a numpy array that maps the 4096 possible ADC values to mV
